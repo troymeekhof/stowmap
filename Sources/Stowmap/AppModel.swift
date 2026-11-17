@@ -111,6 +111,8 @@ final class ScanSession: ObservableObject, Identifiable {
     nonisolated let id: String
     private var ctx: ScanContext?
     private var timer: Timer?
+    /// Called when this session gains or replaces a result, so the app can account for sibling shares.
+    var onResultChanged: (() -> Void)?
 
     init(volume: Volume) {
         self.volume = volume
@@ -127,6 +129,7 @@ final class ScanSession: ObservableObject, Identifiable {
         result = r
         focus = r.root
         phase = .done
+        onResultChanged?()
     }
 
     var isScanning: Bool { phase == .scanning }
@@ -177,11 +180,12 @@ final class ScanSession: ObservableObject, Identifiable {
             return
         }
         let r = scanned
-        addHiddenSpace(to: r.root)
+        if volume.poolKey == nil { addHiddenSpace(to: r.root) }
         result = r
         focus = r.root
         phase = .done
         revision += 1
+        onResultChanged?()      // network shares: the app fills in what else is on the server
         let v = volume
         Task.detached(priority: .utility) { ScanStore.save(r, for: v) }
     }
@@ -193,14 +197,51 @@ final class ScanSession: ObservableObject, Identifiable {
         let reallyUsed = volume.total - volume.realFree
         let gap = reallyUsed - root.size
         guard gap > max(500_000_000, volume.total / 200) else { return }
-        // On a network share the server reports the whole storage pool, so the gap is mostly
-        // other shares, plus the server's snapshots and recycle bins.
-        let label = volume.kind == .network ? "Elsewhere on this server" : "Hidden space"
-        let node = FileNode(name: label, kind: .hiddenSpace, size: gap)
+        let node = FileNode(name: volume.kind == .network ? "Elsewhere on this server" : "Hidden space",
+                            kind: .hiddenSpace, size: gap)
         node.parent = root
         root.children.append(node)
         root.children.sort { $0.size > $1.size }
         root.size += gap
+    }
+
+    /// What this share's own files add up to, without any stand-in entries.
+    var ownScannedBytes: Int64? {
+        guard let root = result?.root else { return nil }
+        return root.children.reduce(Int64(0)) { $0 + ($1.kind == .hiddenSpace ? 0 : $1.size) }
+    }
+
+    /// A server reports the used space of its whole storage pool, so a share's total is bigger than
+    /// its own files. Explain the difference: one entry per sibling share that has been scanned
+    /// (named, with its real size), and one "Elsewhere on this server" entry for the remainder.
+    func applyServerGap(siblings: [(id: String, name: String, bytes: Int64)]) {
+        guard let root = result?.root, volume.total > 0 else { return }
+        let focusWasStandIn = focus?.kind == .hiddenSpace
+        root.children.removeAll { $0.kind == .hiddenSpace }
+        var own: Int64 = 0
+        for c in root.children { own += c.size }
+        var gap = (volume.total - volume.realFree) - own
+        let floor = max(500_000_000, volume.total / 200)
+
+        for sib in siblings.sorted(by: { $0.bytes > $1.bytes }) where sib.bytes > 0 && gap > 0 {
+            let size = min(sib.bytes, gap)
+            let node = FileNode(name: sib.name, kind: .hiddenSpace, size: size)
+            node.linkedVolumeID = sib.id
+            node.parent = root
+            root.children.append(node)
+            gap -= size
+        }
+        if gap > floor {
+            let node = FileNode(name: "Elsewhere on this server", kind: .hiddenSpace, size: gap)
+            node.parent = root
+            root.children.append(node)
+        }
+        var total: Int64 = 0
+        for c in root.children { total += c.size }
+        root.size = total
+        root.children.sort { $0.size > $1.size }
+        if focusWasStandIn { focus = root }
+        revision += 1
     }
 
     // MARK: navigation
@@ -354,7 +395,7 @@ final class AppModel: ObservableObject {
             if let s = sessions[v.id] {
                 if s.volume != v { s.volume = v }
             } else {
-                sessions[v.id] = ScanSession(volume: v)
+                sessions[v.id] = makeSession(v)
             }
         }
         // Forget drives that were unplugged (unless a scan is still unwinding).
@@ -365,6 +406,36 @@ final class AppModel: ObservableObject {
         if selectedID == nil || sessions[selectedID ?? ""] == nil {
             selectedID = list.first?.id
         }
+    }
+
+    private func makeSession(_ v: Volume) -> ScanSession {
+        let s = ScanSession(volume: v)
+        s.onResultChanged = { [weak self, weak s] in
+            guard let self, let s else { return }
+            self.rebalancePool(of: s.volume)
+        }
+        return s
+    }
+
+    /// Recomputes the "what else is on this server" entries for every scanned share on one pool.
+    private func rebalancePool(of volume: Volume) {
+        guard let key = volume.poolKey else { return }
+        let group = sessions.values.filter { $0.volume.poolKey == key }
+        for s in group where s.result != nil && !s.isScanning {
+            let siblings = group.compactMap { other -> (id: String, name: String, bytes: Int64)? in
+                guard other !== s, let bytes = other.ownScannedBytes else { return nil }
+                return (other.volume.id, other.volume.name, bytes)
+            }
+            s.applyServerGap(siblings: siblings)
+        }
+    }
+
+    /// Names of shares on the same server and pool that have not been scanned yet.
+    func unscannedSiblings(of volume: Volume) -> [String] {
+        guard let key = volume.poolKey else { return [] }
+        return sessions.values
+            .filter { $0.volume.poolKey == key && $0.volume.id != volume.id && $0.result == nil }
+            .map { $0.volume.name }.sorted()
     }
 
     func addFolder(_ url: URL) {
@@ -381,7 +452,7 @@ final class AppModel: ObservableObject {
         generation += 1
         if let v = AppModel.folderVolume(path) {
             volumes.append(v)
-            let s = ScanSession(volume: v)
+            let s = makeSession(v)
             sessions[v.id] = s
             selectedID = v.id
             s.start()
@@ -416,6 +487,27 @@ final class AppModel: ObservableObject {
         return Volume(name: name, path: path, kind: .folder)
     }
 
+    /// "//user@nas.local/Media" or "nas.local:/volume1/Media" → "nas.local"
+    nonisolated private static func serverHost(for path: String) -> String? {
+        var fs = statfs()
+        guard statfs(path, &fs) == 0 else { return nil }
+        let from: String = withUnsafePointer(to: &fs.f_mntfromname) { tuple in
+            tuple.withMemoryRebound(to: CChar.self, capacity: MemoryLayout.size(ofValue: tuple.pointee)) {
+                String(cString: $0)
+            }
+        }
+        var host: Substring
+        if from.hasPrefix("//") {
+            host = from.dropFirst(2).prefix { $0 != "/" }
+            if let at = host.lastIndex(of: "@") { host = host[host.index(after: at)...] }
+        } else if let colon = from.range(of: ":/") {
+            host = from[..<colon.lowerBound]
+        } else {
+            return nil
+        }
+        return host.isEmpty ? nil : host.lowercased()
+    }
+
     nonisolated private static func readVolumes() -> [Volume] {
         let keys: [URLResourceKey] = [
             .volumeNameKey, .volumeIsInternalKey, .volumeIsLocalKey, .volumeTotalCapacityKey,
@@ -438,9 +530,10 @@ final class AppModel: ObservableObject {
             else if rv.volumeIsLocal == false { kind = .network }
             else if rv.volumeIsInternal == true { kind = .internalDrive }
             else { kind = .external }
+            let server = kind == .network ? serverHost(for: path) : nil
             out.append(Volume(name: rv.volumeName ?? url.lastPathComponent, path: path, kind: kind,
                               total: total, free: max(realFree, important), realFree: realFree,
-                              format: rv.volumeLocalizedFormatDescription ?? "", uuid: rv.volumeUUIDString))
+                              format: rv.volumeLocalizedFormatDescription ?? "", uuid: rv.volumeUUIDString, server: server))
         }
         return out.sorted { ($0.kind.rawValue, $0.name) < ($1.kind.rawValue, $1.name) }
     }

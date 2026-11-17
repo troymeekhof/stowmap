@@ -300,7 +300,7 @@ struct NodeIcon: View {
         case .folder: return node.unreadable ? "lock.fill" : (node.isHidden ? "folder.badge.gearshape" : "folder.fill")
         case .file: return FileTypes.category(for: node.ext).symbol
         case .smallFiles: return "doc.on.doc"
-        case .hiddenSpace: return "eye.slash"
+        case .hiddenSpace: return node.linkedVolumeID != nil ? "externaldrive.connected.to.line.below.fill" : "eye.slash"
         }
     }
 
@@ -345,8 +345,10 @@ struct NodeMenu: ViewModifier {
     func body(content: Content) -> some View {
         content.contextMenu {
             if node.kind == .hiddenSpace {
-                if session.volume.kind == .network {
-                    Text("Other shares, snapshots and system data on the server")
+                if node.linkedVolumeID != nil {
+                    Text("Another share on the same server")
+                } else if session.volume.kind == .network {
+                    Text("Unscanned shares, snapshots and system data on the server")
                 } else {
                     Button("Open Full Disk Access Settings…") { Finder.openFullDiskAccessSettings() }
                 }

@@ -122,7 +122,7 @@ struct MapTab: View {
         }
         var colorIndex = 0
         for c in l.items.prefix(maxSlices) {
-            if c.kind == .hiddenSpace {
+            if c.kind == .hiddenSpace && c.linkedVolumeID == nil {
                 push(c, c.name, c.size, Theme.hiddenSpace)
             } else {
                 push(c, c.name, c.size, Theme.slice(colorIndex))
@@ -236,6 +236,7 @@ struct MapRow: View {
     var color: Color
     var hot: Bool
     @State private var hover = false
+    @EnvironmentObject private var model: AppModel
 
     var body: some View {
         HStack(spacing: 9) {
@@ -270,18 +271,32 @@ struct MapRow: View {
             .fill(Color.white.opacity(hot || hover ? 0.08 : 0.0001)))
         .contentShape(Rectangle())
         .onHover { hover = $0 }
-        .onTapGesture { session.drill(node) }
+        .onTapGesture {
+            if let linked = node.linkedVolumeID {
+                withAnimation(.easeOut(duration: 0.18)) { model.selectedID = linked }
+            } else {
+                session.drill(node)
+            }
+        }
         .nodeMenu(session, node)
     }
 
     @ViewBuilder
     private var rowActions: some View {
         if node.kind == .hiddenSpace {
-            let network = session.volume.kind == .network
-            IconButton(symbol: "questionmark", help: network
-                ? "Space the server counts as used that isn't in this share: other shared folders on the same storage, snapshots, recycle bins and system data. Scan the other shares to see them."
-                : "Snapshots, purgeable data and protected system files that macOS counts as used but doesn't show to apps. Full Disk Access can shrink this.") {
-                if !network { Finder.openFullDiskAccessSettings() }
+            if let linked = node.linkedVolumeID {
+                IconButton(symbol: "arrow.right", help: "Another share on the same server. Click to show its map.") {
+                    withAnimation(.easeOut(duration: 0.18)) { model.selectedID = linked }
+                }
+            } else if session.volume.kind == .network {
+                let waiting = model.unscannedSiblings(of: session.volume)
+                IconButton(symbol: "questionmark", help: waiting.isEmpty
+                    ? "Space the server counts as used that isn't in any share you've scanned: shares that aren't mounted, snapshots, recycle bins and system data."
+                    : "Space the server counts as used outside the shares you've scanned. Scan \(waiting.joined(separator: ", ")) to break this down.") {}
+            } else {
+                IconButton(symbol: "questionmark", help: "Snapshots, purgeable data and protected system files that macOS counts as used but doesn't show to apps. Full Disk Access can shrink this.") {
+                    Finder.openFullDiskAccessSettings()
+                }
             }
         } else {
             NodeActions(session: session, node: node, showCollect: hot || hover)

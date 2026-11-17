@@ -20,6 +20,7 @@ final class FileNode: Identifiable, @unchecked Sendable {
     weak var parent: FileNode?
     var rootPath: String?          // set on the root node only
     var unreadable = false         // permission denied while listing
+    var linkedVolumeID: String?    // an entry standing in for another share on the same server
 
     init(name: String, kind: Kind, isHidden: Bool = false, size: Int64 = 0, fileCount: Int = 0) {
         self.name = name
@@ -174,9 +175,16 @@ struct Volume: Identifiable, Equatable {
     var realFree: Int64 = 0      // blocks actually free right now
     var format: String = ""
     var uuid: String?
+    var server: String?          // network shares: the host they are mounted from
 
     var used: Int64 { max(0, total - free) }
     var usedFraction: Double { total > 0 ? Double(used) / Double(total) : 0 }
+
+    /// Shares from one server that report the same capacity sit on the same storage pool.
+    var poolKey: String? {
+        guard kind == .network, let server, total > 0 else { return nil }
+        return server + "|" + String(total)
+    }
 
     var symbol: String {
         switch kind {
