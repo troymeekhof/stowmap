@@ -3,12 +3,17 @@ name: Build
 on:
   push:
     branches: [main]
-    paths-ignore: ["docs/**", "*.md", "appcast.xml"]
+    paths-ignore: ["docs/**", "design/**", "*.md", "appcast.xml", "Resources/Info.plist"]
   pull_request:
   workflow_dispatch:
 
 permissions:
   contents: read
+
+# Only the newest push needs a build; older ones in the queue are dropped.
+concurrency:
+  group: build-${{ github.ref }}
+  cancel-in-progress: true
 
 jobs:
   build:

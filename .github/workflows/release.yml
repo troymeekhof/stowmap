@@ -17,6 +17,9 @@ on:
 permissions:
   contents: write
 
+concurrency:
+  group: release
+
 jobs:
   release:
     runs-on: macos-15
@@ -27,6 +30,8 @@ jobs:
       SPARKLE_PRIVATE_KEY: ${{ secrets.SPARKLE_PRIVATE_KEY }}
     steps:
       - uses: actions/checkout@v4
+        with:
+          ref: main          # always release the newest main, even if it moved while this job was queued
       - name: Check version
         run: |
           [[ "$VERSION" =~ ^[0-9]+(\.[0-9]+){1,2}$ ]] || { echo "Bad version: $VERSION"; exit 1; }
@@ -46,6 +51,7 @@ jobs:
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git commit -qam "Release $VERSION" || echo "Version unchanged"
+          git pull -q --rebase origin main
           git push origin HEAD:main
       - name: Create GitHub release
         run: |
@@ -75,6 +81,7 @@ jobs:
           PY
           git add appcast.xml
           git commit -qm "Appcast: $VERSION"
+          git pull -q --rebase origin main
           git push origin HEAD:main
       - name: Note when the update feed was skipped
         if: env.SPARKLE_PRIVATE_KEY == ''
