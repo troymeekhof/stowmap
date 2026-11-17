@@ -2,10 +2,19 @@ import SwiftUI
 import AppKit
 import Sparkle
 
+/// `Stowmap --selftest` runs the copy and checksum checks and exits; otherwise the app starts.
 @main
+enum Launcher {
+    @MainActor static func main() {
+        if CommandLine.arguments.contains("--selftest") { exit(SelfTest.run()) }
+        StowmapApp.main()
+    }
+}
+
 struct StowmapApp: App {
     @NSApplicationDelegateAdaptor(AppDelegate.self) private var delegate
     @StateObject private var model = AppModel()
+    @StateObject private var transfer = TransferModel()
 
     init() {
         _ = Updater.shared   // start Sparkle at launch so daily background checks run
@@ -15,6 +24,7 @@ struct StowmapApp: App {
         Window("Stowmap", id: "main") {
             ContentView()
                 .environmentObject(model)
+                .environmentObject(transfer)
                 .environmentObject(Updater.shared)
                 .frame(minWidth: 960, minHeight: 640)
                 .background(Theme.windowBackground)

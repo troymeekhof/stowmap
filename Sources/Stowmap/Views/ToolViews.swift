@@ -147,7 +147,7 @@ struct ToolProgressBar: View {
     }
 }
 
-private struct ToolHeader<Trailing: View>: View {
+struct ToolHeader<Trailing: View>: View {
     @EnvironmentObject var model: AppModel
     var title: String
     var subtitle: String
@@ -386,7 +386,7 @@ struct DuplicatesView: View {
                 Text(p.stage.isEmpty ? "Starting…" : p.stage)
                     .font(.system(size: 14, weight: .semibold))
                 Text(p.total > 0
-                     ? "\(Fmt.count(p.checked)) of \(Fmt.count(p.total)) files compared"
+                     ? ["\(Fmt.count(p.checked)) of \(Fmt.count(p.total)) files compared", model.dupETA].compactMap { $0 }.joined(separator: "  ·  ")
                      : (model.dupScope == nil ? "Reading the maps of every scanned drive"
                                               : "Reading the map of \(model.dupScopeName)"))
                     .font(.system(size: 11.5, design: .rounded)).monospacedDigit()
@@ -475,7 +475,8 @@ private struct FolderMatchView: View {
                                 .frame(width: 170)
                                 .animation(.easeOut(duration: 0.2), value: f)
                             HStack(spacing: 8) {
-                                Text(f <= 0 ? "Waiting to verify" : "Verifying  \(Fmt.pct(f))")
+                                Text(f <= 0 ? "Waiting to verify"
+                                     : ["Verifying  \(Fmt.pct(f))", model.verifyETAs[match.id]].compactMap { $0 }.joined(separator: "  ·  "))
                                     .font(.system(size: 11, weight: .semibold, design: .rounded)).monospacedDigit()
                                     .foregroundStyle(Theme.cyan)
                                 Button("Stop") { model.cancelVerify(match.id) }

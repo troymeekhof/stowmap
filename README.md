@@ -35,6 +35,11 @@ Stowmap checks for a new version once a day. Gear menu → **Check for Updates�
 - **Tree.** The whole hierarchy as an expandable outline with sizes and percent bars, plus search by name.
 - **File Types.** Space by category (Video, Images, Audio, Documents, Code & Data, Archives,
   Apps, System) and by extension, with file counts.
+- **Copy & Verify.** Copies files and folders to up to three destinations at once and proves each copy
+  with a checksum (xxHash64, MD5 or SHA-256). Each file is written under a temporary name and renamed
+  only when complete; existing files are never replaced unless you choose Replace. Writes an MHL and a
+  plain checksum list. **Check a Copy** compares a folder with its copy and lists what is missing,
+  different or extra.
 - **Search.** One box (⌘F) finds files and folders by name on every drive you've scanned, largest first.
 - **Duplicates.** Finds identical files across drives: same size, then matching samples from the start,
   middle and end, then a full byte-for-byte check when you ask. Always leaves one copy of each set.
@@ -74,6 +79,11 @@ Package.swift                         SwiftPM, macOS 13, Sparkle 2
 Sources/Stowmap/StowmapApp.swift      @main, window, menu commands, Sparkle updater
 Sources/Stowmap/Model.swift           FileNode tree, file-type table, Volume, formatters
 Sources/Stowmap/DiskScanner.swift     parallel walker, type stats, largest-files tracking
+Sources/Stowmap/Hashing.swift         xxHash64, MD5, SHA-256
+Sources/Stowmap/Transfer.swift        copy engine, checksum lists, folder comparison
+Sources/Stowmap/TransferModel.swift   Copy & Verify state, speed, time left
+Sources/Stowmap/Pace.swift            what each drive or link should manage; slow-pace notes
+Sources/Stowmap/SelfTest.swift        `Stowmap --selftest`, run by CI before every release
 Sources/Stowmap/Tools.swift           search and duplicate matching across drives
 Sources/Stowmap/AppModel.swift        volume discovery, ScanSession (scan/navigate/collect), saved index, Finder actions
 Sources/Stowmap/Views/Theme.swift     colours, Card, buttons, GlassTabs, row pieces

@@ -19,6 +19,8 @@ struct ContentView: View {
                     SearchView().transition(.opacity)
                 case .duplicates:
                     DuplicatesView().transition(.opacity)
+                case .copy:
+                    CopyView().transition(.opacity)
                 case .drive:
                     if let session = model.selected {
                         DetailView(session: session)
@@ -69,6 +71,7 @@ private struct EmptyState: View {
 struct Sidebar: View {
     @EnvironmentObject var model: AppModel
     @EnvironmentObject var updater: Updater
+    @EnvironmentObject var transfer: TransferModel
     @FocusState private var searchFocused: Bool
 
     private let groups: [(title: String, kinds: [Volume.Kind])] = [
@@ -190,6 +193,23 @@ struct Sidebar: View {
         }
     }
 
+    private var copyStatus: String {
+        if transfer.checkStage == .running {
+            return ["Checking a copy  \(Fmt.pct(transfer.checkFraction))", transfer.checkETA].compactMap { $0 }.joined(separator: "  ·  ")
+        }
+        switch transfer.stage {
+        case .preparing: return "Listing files"
+        case .running:
+            let mb = String(format: "%.0f MB/s", transfer.speed / 1_000_000)
+            return ["\(Fmt.pct(transfer.snap.fraction))  ·  \(mb)", transfer.etaText].compactMap { $0 }.joined(separator: "  ·  ")
+        case .done:
+            if transfer.snap.phase == .stopped { return "Stopped" }
+            return transfer.snap.problems.isEmpty ? "\(Fmt.count(transfer.snap.good)) files verified"
+                                                  : "\(transfer.snap.problems.count) need attention"
+        case .setup: return "Copy with checksums"
+        }
+    }
+
     private var dupBusy: Bool { model.dupPhase == .running || model.isVerifying }
 
     private var dupFraction: Double {
@@ -199,9 +219,11 @@ struct Sidebar: View {
     private var dupStatus: String {
         if model.dupPhase == .running {
             let stage = model.dupProgress.total > 0 ? "Comparing files" : "Reading maps"
-            return "\(stage)  \(Fmt.pct(model.dupProgress.fraction))"
+            return ["\(stage)  \(Fmt.pct(model.dupProgress.fraction))", model.dupETA].compactMap { $0 }.joined(separator: "  ·  ")
         }
-        if model.isVerifying { return "Verifying copies  \(Fmt.pct(model.verifyOverall))" }
+        if model.isVerifying {
+            return ["Verifying  \(Fmt.pct(model.verifyOverall))", model.dupETA].compactMap { $0 }.joined(separator: "  ·  ")
+        }
         if model.dupPhase == .done {
             if model.dupMatches.isEmpty { return "None found in \(model.dupScopeName)" }
             let wasted = model.dupGroups.reduce(Int64(0)) { $0 + $1.wasted }
@@ -278,6 +300,47 @@ struct Sidebar: View {
             }
             .buttonStyle(.plain)
             .help("Find identical files across the drives you've scanned")
+
+            Button {
+                withAnimation(.easeOut(duration: 0.18)) { model.pane = .copy }
+            } label: {
+                HStack(spacing: 10) {
+                    ZStack {
+                        RoundedRectangle(cornerRadius: 9, style: .continuous)
+                            .fill(model.pane == .copy ? AnyShapeStyle(Theme.brand) : AnyShapeStyle(Color.white.opacity(0.08)))
+                        Image(systemName: "square.and.arrow.down.on.square.fill").font(.system(size: 12, weight: .semibold))
+                    }
+                    .frame(width: 32, height: 32)
+                    VStack(alignment: .leading, spacing: 4) {
+                        HStack(spacing: 6) {
+                            Text("Copy & Verify").font(.system(size: 12.5, weight: .semibold))
+                            Spacer(minLength: 0)
+                            if transfer.isBusy {
+                                ProgressView().controlSize(.small).scaleEffect(0.7).frame(width: 14, height: 14)
+                            } else if transfer.stage == .done {
+                                Image(systemName: transfer.snap.problems.isEmpty && transfer.snap.phase == .finished
+                                      ? "checkmark.circle.fill" : "exclamationmark.triangle.fill")
+                                    .font(.system(size: 10))
+                                    .foregroundStyle(transfer.snap.problems.isEmpty && transfer.snap.phase == .finished
+                                                     ? Theme.good.opacity(0.8) : Theme.warn)
+                            }
+                        }
+                        if transfer.isBusy {
+                            MeterBar(fraction: transfer.busyFraction, color: Theme.cyan)
+                                .animation(.easeOut(duration: 0.2), value: transfer.busyFraction)
+                        }
+                        Text(copyStatus)
+                            .font(.system(size: 10)).foregroundStyle(Theme.textSecondary)
+                            .monospacedDigit().lineLimit(1)
+                    }
+                }
+                .padding(8)
+                .background(RoundedRectangle(cornerRadius: 12, style: .continuous)
+                    .fill(Color.white.opacity(model.pane == .copy ? 0.09 : 0.0001)))
+                .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            .help("Copy files between drives and verify them with checksums")
         }
         .padding(.horizontal, 10).padding(.bottom, 12)
         .background {
@@ -339,7 +402,7 @@ struct VolumeRow: View {
     private var scanStatus: String {
         let p = session.progress
         if let f = session.scanFraction {
-            return "Scanning \(Fmt.pct(f))  ·  \(Fmt.count(p.files)) files"
+            return ["Scanning \(Fmt.pct(f))", session.scanETA ?? "\(Fmt.count(p.files)) files"].joined(separator: "  ·  ")
         }
         return "Scanning  ·  \(Fmt.bytes(p.bytes)) mapped"
     }
@@ -707,12 +770,26 @@ struct ScanningView: View {
                 FactRow(label: "Mapped so far", value: Fmt.bytes(p.bytes))
                 FactRow(label: "Files", value: NumberFormatter.localizedString(from: NSNumber(value: p.files), number: .decimal))
                 if let f = fraction { FactRow(label: "Progress", value: Fmt.pct(f)) }
+                if let eta = session.scanETA {
+                    FactRow(label: "Time left", value: eta.replacingOccurrences(of: " left", with: ""))
+                }
                 if let started = session.startedAt {
                     TimelineView(.periodic(from: started, by: 1)) { ctx in
                         FactRow(label: "Elapsed", value: clock(ctx.date.timeIntervalSince(started)))
                     }
                 }
                 FactRow(label: "Folders without access", value: Fmt.count(p.denied))
+
+                if let note = session.paceNote {
+                    HStack(alignment: .top, spacing: 8) {
+                        Image(systemName: "tortoise.fill").foregroundStyle(Theme.amber)
+                        Text(note).font(.system(size: 11.5)).foregroundStyle(Color.white.opacity(0.8))
+                            .fixedSize(horizontal: false, vertical: true)
+                    }
+                    .padding(.horizontal, 10).padding(.vertical, 8)
+                    .background(RoundedRectangle(cornerRadius: 10, style: .continuous).fill(Theme.amber.opacity(0.10)))
+                    .padding(.horizontal, 6).padding(.top, 10)
+                }
 
                 CardTitle(text: "Reading now", symbol: "doc.text.magnifyingglass")
                     .padding(.horizontal, 10).padding(.top, 18).padding(.bottom, 6)

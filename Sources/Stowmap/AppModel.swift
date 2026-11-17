@@ -106,6 +106,11 @@ final class ScanSession: ObservableObject, Identifiable {
     @Published private(set) var progress = ScanProgress()
     @Published private(set) var recentPaths: [String] = []   // newest first, for the scanning view
     private(set) var startedAt: Date?
+    private var basisBytes: Int64?                 // what the previous scan of this drive added up to
+    /// A quiet note when mapping is well under what this drive or link usually manages.
+    @Published private(set) var paceNote: String?
+    private var expectedClass: DeviceClass?
+    private var rateMark: (date: Date, files: Int)?
     @Published private(set) var collected: [FileNode] = []
     @Published var trashError: String?
     @Published private(set) var revision = 0      // bumps when the tree changes in place
@@ -142,13 +147,30 @@ final class ScanSession: ObservableObject, Identifiable {
     /// How far a scan has got, 0…1, when the amount to scan is known. That is only true for a
     /// whole local drive: a network share reports its server's entire pool, and a folder has no total.
     var scanFraction: Double? {
-        guard isScanning, volume.total > 0, volume.kind != .network, volume.kind != .folder else { return nil }
-        let used = Double(max(1, volume.total - volume.realFree))
-        return min(0.99, Double(progress.bytes) / used)
+        guard isScanning else { return nil }
+        if volume.total > 0, volume.kind != .network, volume.kind != .folder {
+            let used = Double(max(1, volume.total - volume.realFree))
+            return min(0.99, Double(progress.bytes) / used)
+        }
+        // Shares and folders have no total of their own, but the last scan is a good guide.
+        if let basis = basisBytes, basis > 0 { return min(0.99, Double(progress.bytes) / Double(basis)) }
+        return nil
     }
+
+    /// "about 4 min left", once there's enough to go on.
+    var scanETA: String? { ETA.text(started: startedAt, fraction: scanFraction ?? 0) }
 
     func start() {
         guard phase != .scanning else { return }
+        basisBytes = ownScannedBytes
+        paceNote = nil
+        rateMark = nil
+        expectedClass = nil
+        let path = volume.path
+        DispatchQueue.global(qos: .utility).async { [weak self] in
+            let cls = Hardware.expected(forPath: path)
+            Task { @MainActor in self?.expectedClass = cls }
+        }
         let context = DiskScanner.makeContext(for: volume)
         ctx = context
         progress = ScanProgress()
@@ -177,6 +199,18 @@ final class ScanSession: ObservableObject, Identifiable {
 
     private func tick(_ snap: ScanProgress) {
         progress = snap
+        // Every 15 seconds, compare the listing rate with what this hardware usually manages.
+        let now = Date()
+        if let mark = rateMark {
+            let dt = now.timeIntervalSince(mark.date)
+            if dt >= 15 {
+                let rate = Double(snap.files - mark.files) / dt
+                paceNote = Pace.scanNote(name: volume.name, rate: rate, expected: expectedClass)
+                rateMark = (now, snap.files)
+            }
+        } else {
+            rateMark = (now, snap.files)
+        }
         if !snap.path.isEmpty, snap.path != recentPaths.first {
             recentPaths.insert(snap.path, at: 0)
             if recentPaths.count > 6 { recentPaths.removeLast() }
@@ -350,7 +384,7 @@ final class AppModel: ObservableObject {
     @Published private(set) var sessions: [String: ScanSession] = [:]
 
     /// What the main area shows: one drive's map, search results, or duplicates.
-    enum Pane { case drive, search, duplicates }
+    enum Pane { case drive, search, duplicates, copy }
     @Published var pane: Pane = .drive
 
     // Search across every scanned drive
@@ -385,6 +419,10 @@ final class AppModel: ObservableObject {
     private var verifyTimer: Timer?
     private let verifyQueue = DispatchQueue(label: "com.midjulymedia.stowmap.verify", qos: .utility)
     @Published var toolError: String?
+    private(set) var dupStarted: Date?
+    /// Time-left text for each verify job that is under way.
+    @Published private(set) var verifyETAs: [String: String] = [:]
+    private var verifyStarted: [String: Date] = [:]
     /// Leave macOS and app files out of the duplicate check. On by default.
     @Published private(set) var dupSkipSystem: Bool = UserDefaults.standard.object(forKey: "dupSkipSystem") as? Bool ?? true
     /// Folders the user chose to leave out of the duplicate check.
@@ -586,6 +624,12 @@ final class AppModel: ObservableObject {
         return all.filter { $0.id == scope }
     }
 
+    /// "about 3 min left" for the duplicate check or the verify jobs, whichever is running.
+    var dupETA: String? {
+        if dupPhase == .running { return ETA.text(started: dupStarted, fraction: dupProgress.fraction) }
+        return verifyETAs.values.sorted().first
+    }
+
     var dupScopeName: String {
         guard let scope = dupScope else { return "All drives" }
         return sessions[scope]?.volume.name ?? "This drive"
@@ -616,6 +660,7 @@ final class AppModel: ObservableObject {
         dupScan = scan
         dupGroups = []
         dupProgress = DupProgress()
+        dupStarted = Date()
         dupPhase = .running
         dupTimer?.invalidate()
         dupTimer = Timer.scheduledTimer(withTimeInterval: 0.2, repeats: true) { [weak self] _ in
@@ -728,7 +773,10 @@ final class AppModel: ObservableObject {
     private func pollVerify() {
         var done: Int64 = 0, total: Int64 = 0
         for job in verifyJobs {
-            verifyFractions[job.key] = job.progress.fraction
+            let f = job.progress.fraction
+            if f > 0, verifyStarted[job.key] == nil { verifyStarted[job.key] = Date() }
+            verifyETAs[job.key] = ETA.text(started: verifyStarted[job.key], fraction: f)
+            verifyFractions[job.key] = f
             let c = job.progress.counts
             done += c.done
             total += c.total
@@ -750,6 +798,8 @@ final class AppModel: ObservableObject {
         for item in job.items { dupVerifying.remove(item.groupID) }
         verifyJobs.removeAll { $0 === job }
         verifyFractions[job.key] = nil
+        verifyETAs[job.key] = nil
+        verifyStarted[job.key] = nil
         if verifyJobs.isEmpty {
             verifyTimer?.invalidate()
             verifyTimer = nil

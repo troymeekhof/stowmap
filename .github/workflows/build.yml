@@ -24,6 +24,8 @@ jobs:
         run: swift --version
       - name: Build universal app (ad-hoc signed)
         run: DMG_OUT="$RUNNER_TEMP/Stowmap.dmg" ./build.sh --package
+      - name: Self-test (checksums and copy engine)
+        run: '"${TMPDIR:-/tmp}/stowmap-build/Stowmap.app/Contents/MacOS/Stowmap" --selftest'
       - name: Upload DMG
         continue-on-error: true   # a GitHub storage hiccup shouldn't mark a good build as failed
         uses: actions/upload-artifact@v4

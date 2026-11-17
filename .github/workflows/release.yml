@@ -50,6 +50,8 @@ jobs:
           DMG_OUT="$RUNNER_TEMP/dist/Stowmap.dmg" ./build.sh --package
           ditto -c -k --sequesterRsrc --keepParent "${TMPDIR:-/tmp}/stowmap-build/Stowmap.app" \
             "$RUNNER_TEMP/dist/Stowmap-$VERSION.zip"
+      - name: Self-test (checksums and copy engine)
+        run: '"${TMPDIR:-/tmp}/stowmap-build/Stowmap.app/Contents/MacOS/Stowmap" --selftest'
       - name: Commit version bump
         run: |
           git config user.name "github-actions[bot]"
