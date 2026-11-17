@@ -54,7 +54,7 @@
   <div class="copy"><p class="eyebrow">Copy &amp; Verify</p><h2 id="cv-h">Copy footage and check every file</h2>
   <p>Copy &amp; Verify is a copier with checksum verification, for moving footage and projects between drives. Pick the files or folders and up to three destinations. Stowmap reads the source once and writes to all of them.</p>
   <p>Each file is written under a temporary name and only takes its real name once it is complete. Then Stowmap reads back what it wrote from the disk and compares checksums: xxHash64, MD5 or SHA-256.</p>
-  <p>A file that already exists is never replaced unless you choose Replace. You can pause or stop a copy, and it can write an MHL checksum list and a plain text list when it finishes.</p></div>
+  <p>A file that already exists is never replaced unless you choose Replace. You can pause or stop a copy, and it can write an MHL checksum list and a plain text list into each destination folder when it finishes.</p></div>
   <figure class="window crop" style="--pos:0%"><video data-loop muted loop playsinline preload="none" width="1200" height="994" poster="assets/video/stowmap-copy-poster.webp" aria-label="Six folders and two destinations are chosen in Copy &amp; Verify. Start Copy is clicked, a ring fills while a graph of copy speed draws, the phase changes to Verifying, and the result reads All 1,204 files verified."><source src="assets/video/stowmap-copy.webm" type="video/webm"><source src="assets/video/stowmap-copy.mp4" type="video/mp4"></video></figure>
 </div></section>
 
@@ -68,7 +68,7 @@
 <section aria-labelledby="f1-h"><div class="wrap feature">
   <div class="copy"><p class="eyebrow">Drives</p><h2 id="f1-h">Every drive in one sidebar</h2>
   <p>Your startup SSD, internal and external drives on USB or Thunderbolt, SD cards, and network shares over SMB, AFP or NFS each get a row with a live used and free bar. Plug a drive in and it appears. Unplug it and it goes. Any folder can be scanned too, with the button or by dragging it in.</p>
-  <p>Scans run in parallel, and several drives can scan at once. Scan All Drives queues every drive in the sidebar, and each row shows its own progress while it scans.</p></div>
+  <p>Scans run in parallel, and several drives can scan at once. Scan All Drives starts every local drive together and takes network shares one at a time, and each row shows its own progress while it scans.</p></div>
   <figure class="window"><video data-loop muted loop playsinline preload="none" width="1000" height="1198" poster="assets/video/stowmap-scan-poster.webp" aria-label="A never-scanned external drive is picked in the Stowmap sidebar and scanned. A progress ring fills, then the map of the drive appears."><source src="assets/video/stowmap-scan.webm" type="video/webm"><source src="assets/video/stowmap-scan.mp4" type="video/mp4"></video></figure>
 </div></section>
 
