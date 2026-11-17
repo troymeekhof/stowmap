@@ -3,6 +3,15 @@
   <channel>
     <title>Stowmap</title>
     <item>
+      <title>Version 1.2.1</title>
+      <pubDate>Tue, 17 Nov 2026 20:18:47 GMT</pubDate>
+      <sparkle:version>1.2.1</sparkle:version>
+      <sparkle:shortVersionString>1.2.1</sparkle:shortVersionString>
+      <sparkle:minimumSystemVersion>13.0</sparkle:minimumSystemVersion>
+      <description><![CDATA[<p>The Duplicates row in the sidebar shows a progress bar while it works. Verify shows a bar and percentage on each row and can be stopped. Adds a 10 GB minimum size.</p>]]></description>
+      <enclosure url="https://github.com/troymeekhof/stowmap/releases/download/v1.2.1/Stowmap-1.2.1.zip" type="application/octet-stream" sparkle:edSignature="qz7ayoLc0xuuREhpNBVGfx5aju9WXHjK1Ji5PrXT1Weaqjv5p65Hdvl4X2z6tV5nxg+O/1Q0PcM+ykL2bJk1CA==" length="3158528" />
+    </item>
+    <item>
       <title>Version 1.2</title>
       <pubDate>Tue, 17 Nov 2026 19:48:54 GMT</pubDate>
       <sparkle:version>1.2</sparkle:version>
