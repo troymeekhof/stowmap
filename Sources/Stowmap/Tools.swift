@@ -13,6 +13,20 @@ struct TreeRoot: @unchecked Sendable {
     let fromCache: Bool
 }
 
+/// How far a background pass has got, measured in bytes of the maps it has walked.
+final class WorkProgress: @unchecked Sendable {
+    private let lock = NSLock()
+    private var done: Int64 = 0
+    private var total: Int64 = 1
+
+    func start(total: Int64) { lock.lock(); self.total = max(1, total); done = 0; lock.unlock() }
+    func add(_ bytes: Int64) { lock.lock(); done += bytes; lock.unlock() }
+    var fraction: Double {
+        lock.lock(); defer { lock.unlock() }
+        return min(1, Double(done) / Double(total))
+    }
+}
+
 // MARK: - Search
 
 struct SearchHit: Identifiable, @unchecked Sendable {
@@ -30,15 +44,25 @@ struct SearchOutcome: @unchecked Sendable {
 enum TreeSearch {
     /// Every word in the query must appear in the name (any order, case and accents ignored).
     /// Returns the largest matches first. kind: 0 all, 1 folders, 2 files.
-    static func run(query: String, roots: [TreeRoot], kind: Int, limit: Int = 400) -> SearchOutcome {
+    static func run(query: String, roots: [TreeRoot], kind: Int, limit: Int = 400,
+                    progress: WorkProgress? = nil) -> SearchOutcome {
         let terms = query.split(whereSeparator: { $0 == " " }).map(String.init)
         guard !terms.isEmpty else { return SearchOutcome(hits: [], total: 0) }
         var hits: [SearchHit] = []
         var total = 0
+        progress?.start(total: roots.reduce(Int64(0)) { $0 + $1.root.size })
+        var walked: Int64 = 0
+        var sinceReport = 0
         for r in roots {
             var stack: [FileNode] = [r.root]
             while let n = stack.popLast() {
                 for c in n.children {
+                    // Everything that isn't a folder is a leaf; its bytes count as ground covered.
+                    if c.kind != .folder {
+                        walked += c.size
+                        sinceReport += 1
+                        if sinceReport >= 4000 { progress?.add(walked); walked = 0; sinceReport = 0 }
+                    }
                     if c.kind == .folder { stack.append(c) } else if c.kind != .file { continue }
                     if kind == 1 && c.kind != .folder { continue }
                     if kind == 2 && c.kind != .file { continue }
@@ -57,6 +81,7 @@ enum TreeSearch {
                 }
             }
         }
+        progress?.add(walked)
         hits.sort { $0.node.size > $1.node.size }
         if hits.count > limit { hits.removeLast(hits.count - limit) }
         return SearchOutcome(hits: hits, total: total)
@@ -88,6 +113,15 @@ struct DupProgress {
     var stage = ""
     var checked = 0
     var total = 0
+    var bytesDone: Int64 = 0
+    var bytesTotal: Int64 = 0
+
+    /// Step one (walking the maps) is the first fifth of the bar; comparing samples is the rest.
+    var fraction: Double {
+        if total > 0 { return 0.2 + 0.8 * Double(checked) / Double(total) }
+        if bytesTotal > 0 { return 0.2 * min(1, Double(bytesDone) / Double(bytesTotal)) }
+        return 0
+    }
 }
 
 final class DuplicateScan: @unchecked Sendable {
@@ -102,6 +136,8 @@ final class DuplicateScan: @unchecked Sendable {
         lock.lock(); progress.stage = stage; progress.total = total; progress.checked = 0; lock.unlock()
     }
     func tick() { lock.lock(); progress.checked += 1; lock.unlock() }
+    func walk(total: Int64) { lock.lock(); progress.bytesTotal = max(1, total); progress.bytesDone = 0; lock.unlock() }
+    func walked(_ bytes: Int64) { lock.lock(); progress.bytesDone += bytes; lock.unlock() }
 }
 
 enum DuplicateFinder {
@@ -127,11 +163,15 @@ enum DuplicateFinder {
     static func run(roots: [TreeRoot], minSize: Int64, scan: DuplicateScan) -> [DupGroup] {
         // 1. Same length. Uses what the scan recorded; nothing is read from disk for most files.
         scan.set(stage: "Looking for files of the same size")
+        scan.walk(total: roots.reduce(Int64(0)) { $0 + $1.root.size })
         var byLength: [Int64: [Candidate]] = [:]
         for (i, r) in roots.enumerated() {
             var stack: [FileNode] = [r.root]
             while let n = stack.popLast() {
                 if scan.isCancelled { return [] }
+                var leafBytes: Int64 = 0
+                for c in n.children where c.kind != .folder { leafBytes += c.size }
+                if leafBytes > 0 { scan.walked(leafBytes) }
                 for c in n.children {
                     if c.kind == .folder {
                         stack.append(c)

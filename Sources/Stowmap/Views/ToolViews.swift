@@ -20,9 +20,10 @@ struct DriveBadge: View {
 /// Which scans a cross-drive result is based on, and how old they are.
 struct ScanBasis: View {
     @EnvironmentObject var model: AppModel
+    var only: String? = nil        // a volume id, when the result covers one drive
     var body: some View {
-        let roots = model.scannedRoots()
-        let waiting = model.unscannedNames
+        let roots = model.scannedRoots().filter { only == nil || $0.id == only }
+        let waiting = only == nil ? model.unscannedNames : []
         VStack(alignment: .leading, spacing: 3) {
             if roots.isEmpty {
                 Text("No drive has been scanned yet. Scan one from the sidebar first.")
@@ -132,6 +133,18 @@ struct SharedCollectorBar: View {
     }
 }
 
+/// Progress for a pass over the maps, drawn like the capacity bar under a drive's name.
+struct ToolProgressBar: View {
+    var fraction: Double
+    var active: Bool
+    var body: some View {
+        MeterBar(fraction: fraction, color: Theme.cyan, height: 6)
+            .animation(.easeOut(duration: 0.2), value: fraction)
+            .opacity(active ? 1 : 0)
+            .animation(.easeOut(duration: 0.25), value: active)
+    }
+}
+
 private struct ToolHeader<Trailing: View>: View {
     @EnvironmentObject var model: AppModel
     var title: String
@@ -177,6 +190,7 @@ struct SearchView: View {
                 ])
                 .frame(width: 300)
             }
+            ToolProgressBar(fraction: model.searchProgress, active: model.searchBusy)
             ScanBasis()
 
             Card(padding: 8) {
@@ -225,11 +239,18 @@ struct DuplicatesView: View {
 
     private var subtitle: String {
         switch model.dupPhase {
-        case .idle: return "Find identical files across every drive you've scanned."
+        case .idle:
+            return model.dupScope == nil
+                ? "Find identical files across every drive you've scanned."
+                : "Find identical files within \(model.dupScopeName)."
         case .running: return model.dupProgress.stage.isEmpty ? "Starting…" : model.dupProgress.stage + "…"
         case .done:
             let wasted = model.dupGroups.reduce(Int64(0)) { $0 + $1.wasted }
-            if model.dupGroups.isEmpty { return "No duplicates of that size on the scanned drives." }
+            if model.dupGroups.isEmpty {
+                return model.dupScope == nil
+                    ? "No duplicates of that size on the scanned drives."
+                    : "No duplicates of that size within \(model.dupScopeName)."
+            }
             return "\(Fmt.count(model.dupGroups.count)) sets of copies. Keeping one of each would free \(Fmt.bytes(wasted))."
         }
     }
@@ -237,6 +258,20 @@ struct DuplicatesView: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 14) {
             ToolHeader(title: "Duplicates", subtitle: subtitle) {
+                Menu {
+                    Button("All drives") { model.setDupScope(nil) }
+                    Divider()
+                    ForEach(model.scannedRoots(), id: \.id) { r in
+                        Button("Within \(r.name)") { model.setDupScope(r.id) }
+                    }
+                } label: {
+                    Label(model.dupScope == nil ? "All drives" : "Within \(model.dupScopeName)",
+                          systemImage: model.dupScope == nil ? "externaldrive.fill.badge.checkmark" : "internaldrive")
+                        .font(.system(size: 12, weight: .semibold))
+                }
+                .menuStyle(.borderlessButton).fixedSize()
+                .disabled(model.dupPhase == .running)
+                .help("Where to look for duplicates")
                 Menu {
                     ForEach(sizes, id: \.mb) { s in
                         Button(s.label) { minMB = s.mb }
@@ -258,7 +293,8 @@ struct DuplicatesView: View {
                     .buttonStyle(GlowButtonStyle())
                 }
             }
-            ScanBasis()
+            ToolProgressBar(fraction: model.dupProgress.fraction, active: model.dupPhase == .running)
+            ScanBasis(only: model.dupScope)
 
             Group {
                 switch model.dupPhase {
@@ -312,17 +348,17 @@ struct DuplicatesView: View {
     private var running: some View {
         let p = model.dupProgress
         return Card(padding: 24) {
-            VStack(spacing: 14) {
-                ProgressView().controlSize(.large)
+            VStack(spacing: 10) {
+                Text(Fmt.pct(p.fraction))
+                    .font(.system(size: 40, weight: .bold, design: .rounded)).monospacedDigit()
                 Text(p.stage.isEmpty ? "Starting…" : p.stage)
                     .font(.system(size: 14, weight: .semibold))
-                if p.total > 0 {
-                    MeterBar(fraction: Double(p.checked) / Double(max(1, p.total)), color: Theme.cyan, height: 6)
-                        .frame(maxWidth: 360)
-                    Text("\(Fmt.count(p.checked)) of \(Fmt.count(p.total)) files")
-                        .font(.system(size: 11.5, design: .rounded)).monospacedDigit()
-                        .foregroundStyle(Theme.textSecondary)
-                }
+                Text(p.total > 0
+                     ? "\(Fmt.count(p.checked)) of \(Fmt.count(p.total)) files compared"
+                     : (model.dupScope == nil ? "Reading the maps of every scanned drive"
+                                              : "Reading the map of \(model.dupScopeName)"))
+                    .font(.system(size: 11.5, design: .rounded)).monospacedDigit()
+                    .foregroundStyle(Theme.textSecondary)
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity)
         }

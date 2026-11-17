@@ -366,6 +366,8 @@ final class AppModel: ObservableObject {
     @Published private(set) var searchBusy = false
     @Published private(set) var searchedFor = ""
     private var searchToken = 0
+    @Published private(set) var searchProgress: Double = 0
+    private var searchTimer: Timer?
 
     // Duplicates across every scanned drive
     enum DupPhase { case idle, running, done }
@@ -374,6 +376,8 @@ final class AppModel: ObservableObject {
     @Published private(set) var dupProgress = DupProgress()
     @Published private(set) var dupVerifying = Set<Int>()
     @Published var toolError: String?
+    /// nil = every scanned drive; otherwise the one drive to look within.
+    @Published private(set) var dupScope: String?
     private var dupScan: DuplicateScan?
     private var dupTimer: Timer?
 
@@ -488,9 +492,19 @@ final class AppModel: ObservableObject {
         let token = searchToken
         let roots = scannedRoots()
         let kind = searchKind
+        let progress = WorkProgress()
         searchBusy = true
+        searchProgress = 0
+        searchTimer?.invalidate()
+        searchTimer = Timer.scheduledTimer(withTimeInterval: 0.08, repeats: true) { [weak self] _ in
+            let f = progress.fraction
+            Task { @MainActor in
+                guard let self, self.searchToken == token, self.searchBusy else { return }
+                self.searchProgress = f
+            }
+        }
         DispatchQueue.global(qos: .userInitiated).async { [weak self] in
-            let out = TreeSearch.run(query: q, roots: roots, kind: kind)
+            let out = TreeSearch.run(query: q, roots: roots, kind: kind, progress: progress)
             Task { @MainActor in self?.finishSearch(out, query: q, token: token) }
         }
     }
@@ -501,6 +515,9 @@ final class AppModel: ObservableObject {
         searchTotal = out.total
         searchedFor = query
         searchBusy = false
+        searchProgress = 1
+        searchTimer?.invalidate()
+        searchTimer = nil
     }
 
     func clearSearch() {
@@ -519,9 +536,38 @@ final class AppModel: ObservableObject {
 
     // MARK: duplicates
 
+    /// Roots the duplicate check will use for the current scope.
+    func duplicateRoots() -> [TreeRoot] {
+        let all = scannedRoots()
+        guard let scope = dupScope else { return all }
+        return all.filter { $0.id == scope }
+    }
+
+    var dupScopeName: String {
+        guard let scope = dupScope else { return "All drives" }
+        return sessions[scope]?.volume.name ?? "This drive"
+    }
+
+    /// Changing where to look throws away results from the previous scope.
+    func setDupScope(_ id: String?) {
+        guard dupPhase != .running, id != dupScope else { return }
+        dupScope = id
+        dupGroups = []
+        dupPhase = .idle
+    }
+
+    /// From a drive's header: look for duplicates within that one drive.
+    func openDuplicates(for volumeID: String) {
+        pane = .duplicates
+        guard dupPhase != .running else { return }
+        setDupScope(volumeID)
+        let mb = UserDefaults.standard.object(forKey: "dupMinMB") as? Int ?? 10
+        findDuplicates(minSize: Int64(mb) * 1_000_000)
+    }
+
     func findDuplicates(minSize: Int64) {
         guard dupPhase != .running else { return }
-        let roots = scannedRoots()
+        let roots = duplicateRoots()
         let scan = DuplicateScan()
         dupScan = scan
         dupGroups = []

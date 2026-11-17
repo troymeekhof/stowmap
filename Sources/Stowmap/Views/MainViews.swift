@@ -263,6 +263,7 @@ struct VolumeRow: View {
 
 struct DetailView: View {
     @ObservedObject var session: ScanSession
+    @EnvironmentObject private var model: AppModel
     @AppStorage("showHidden") private var showHidden = true
     @State private var tab = 0
     @State private var confirmTrash = false
@@ -329,6 +330,11 @@ struct DetailView: View {
                     }
                     .buttonStyle(QuietButtonStyle(tint: showHidden ? Theme.cyan : Color.white))
                     .help(showHidden ? "Hidden files and folders are shown. Click to fold them away." : "Hidden files and folders are folded away. Click to show them.")
+                    Button { model.openDuplicates(for: v.id) } label: {
+                        Label("Duplicates", systemImage: "doc.on.doc")
+                    }
+                    .buttonStyle(QuietButtonStyle())
+                    .help("Find identical files within this drive")
                     Menu {
                         Button("Export This Folder as CSV…") { exportCSV() }
                         Button("Open in Finder") { Finder.open(session.focus?.path ?? v.path) }
