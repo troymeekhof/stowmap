@@ -43,6 +43,12 @@ struct ContentView: View {
                     .allowsHitTesting(false)
             }
         }
+        .confirmationDialog(deleteTitle, isPresented: $model.deletePrompt, titleVisibility: .visible) {
+            Button("Delete Permanently", role: .destructive) { model.confirmPermanentDelete() }
+            Button("Cancel", role: .cancel) { model.cancelPermanentDelete() }
+        } message: {
+            Text(deleteMessage)
+        }
         .onDrop(of: [UTType.fileURL], isTargeted: $dropTargeted) { providers in
             guard let provider = providers.first else { return false }
             let appModel = model
@@ -52,6 +58,20 @@ struct ContentView: View {
             }
             return true
         }
+    }
+}
+
+private extension ContentView {
+    var deleteTitle: String {
+        let n = model.pendingDeleteNodes.count
+        return "Delete \(n) item\(n == 1 ? "" : "s") permanently?"
+    }
+
+    var deleteMessage: String {
+        let nodes = model.pendingDeleteNodes
+        let names = nodes.prefix(6).map { "• " + $0.name }.joined(separator: "\n")
+        let more = nodes.count > 6 ? "\n…and \(nodes.count - 6) more" : ""
+        return "\(model.pendingDeleteVolumes) has no Trash, so these can't be moved there. Deleting erases them now (\(Fmt.bytes(model.pendingDeleteBytes))) and they can't be recovered.\n\n\(names)\(more)"
     }
 }
 

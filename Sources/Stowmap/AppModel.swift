@@ -113,6 +113,11 @@ final class ScanSession: ObservableObject, Identifiable {
     private var rateMark: (date: Date, files: Int)?
     @Published private(set) var collected: [FileNode] = []
     @Published var trashError: String?
+    /// Items that couldn't be moved to a Trash because their volume has none. They wait here
+    /// until the user approves erasing them for good, or cancels.
+    @Published private(set) var pendingDelete: [FileNode] = []
+    @Published private(set) var deleting = false
+    var onNeedsPermanentDelete: (() -> Void)?
     @Published private(set) var revision = 0      // bumps when the tree changes in place
 
     nonisolated let id: String
@@ -332,6 +337,7 @@ final class ScanSession: ObservableObject, Identifiable {
     func trashCollected() {
         var failures: [String] = []
         var trashed: [String] = []
+        var noTrash: [FileNode] = []
         for node in collected {
             let path = node.path
             let url = URL(fileURLWithPath: path)
@@ -340,10 +346,19 @@ final class ScanSession: ObservableObject, Identifiable {
                 trashed.append(path)
                 detach(node)
             } catch {
-                failures.append("\(node.name): \(error.localizedDescription)")
+                let ns = error as NSError
+                if ns.domain == NSCocoaErrorDomain && ns.code == NSFeatureUnsupportedError {
+                    noTrash.append(node)       // the volume has no Trash (most network shares)
+                } else {
+                    failures.append("\(node.name): \(error.localizedDescription)")
+                }
             }
         }
         collected = []
+        if !noTrash.isEmpty {
+            pendingDelete = noTrash
+            onNeedsPermanentDelete?()
+        }
         if !trashed.isEmpty {
             // Largest Files is a flat list of paths: drop anything that just went to the Trash.
             result?.largest.removeAll { f in
@@ -360,6 +375,53 @@ final class ScanSession: ObservableObject, Identifiable {
             Task.detached(priority: .utility) { ScanStore.save(r, for: v) }
         }
     }
+
+    /// Erases the items that couldn't go to a Trash. Only ever called after the user confirms.
+    /// Runs off the main thread (a big folder on a share can take a while), then updates the map.
+    func deletePendingPermanently(then done: @escaping () -> Void) {
+        let nodes = pendingDelete
+        pendingDelete = []
+        guard !nodes.isEmpty else { done(); return }
+        let jobs = nodes.map { (node: $0, path: $0.path) }
+        deleting = true
+        DispatchQueue.global(qos: .userInitiated).async { [weak self] in
+            var removed: [Int] = []
+            var failures: [String] = []
+            for (i, job) in jobs.enumerated() {
+                if SystemPaths.isProtected(job.path) {
+                    failures.append("\(job.node.name): part of macOS, not deleted")
+                    continue
+                }
+                do {
+                    try FileManager.default.removeItem(atPath: job.path)
+                    removed.append(i)
+                } catch {
+                    failures.append("\(job.node.name): \(error.localizedDescription)")
+                }
+            }
+            Task { @MainActor in
+                guard let self else { return }
+                let gone = removed.map { jobs[$0].path }
+                for i in removed { self.detach(jobs[i].node) }
+                if !gone.isEmpty {
+                    self.result?.largest.removeAll { f in gone.contains { f.path == $0 || f.path.hasPrefix($0 + "/") } }
+                }
+                self.deleting = false
+                self.revision += 1
+                if !failures.isEmpty {
+                    self.trashError = failures.prefix(5).joined(separator: "\n")
+                        + (failures.count > 5 ? "\n…and \(failures.count - 5) more" : "")
+                }
+                if let r = self.result {
+                    let v = self.volume
+                    Task.detached(priority: .utility) { ScanStore.save(r, for: v) }
+                }
+                done()
+            }
+        }
+    }
+
+    func cancelPendingDelete() { pendingDelete = [] }
 
     private func detach(_ node: FileNode) {
         guard let parent = node.parent else { return }
@@ -386,6 +448,8 @@ final class AppModel: ObservableObject {
     /// What the main area shows: one drive's map, search results, or duplicates.
     enum Pane { case drive, search, duplicates, copy }
     @Published var pane: Pane = .drive
+    /// Asks before erasing items on a volume that has no Trash.
+    @Published var deletePrompt = false
 
     // Search across every scanned drive
     @Published var searchText = ""
@@ -495,6 +559,7 @@ final class AppModel: ObservableObject {
             self.rebalancePool(of: s.volume)
         }
         s.onScanStateChanged = { [weak self] in self?.advanceScanAll() }
+        s.onNeedsPermanentDelete = { [weak self] in self?.deletePrompt = true }
         return s
     }
 
@@ -887,6 +952,35 @@ final class AppModel: ObservableObject {
         }
         searchResults.removeAll { !fm.fileExists(atPath: $0.node.path) }
         if !errors.isEmpty { toolError = errors.joined(separator: "\n") }
+    }
+
+    // MARK: permanent delete (volumes without a Trash)
+
+    var pendingDeleteNodes: [FileNode] { sessions.values.flatMap { $0.pendingDelete } }
+    var pendingDeleteBytes: Int64 { pendingDeleteNodes.reduce(Int64(0)) { $0 + $1.size } }
+    var pendingDeleteVolumes: String {
+        sessions.values.filter { !$0.pendingDelete.isEmpty }.map { $0.volume.name }.sorted().joined(separator: ", ")
+    }
+
+    func confirmPermanentDelete() {
+        for s in sessions.values where !s.pendingDelete.isEmpty {
+            s.deletePendingPermanently { [weak self] in self?.afterRemoval() }
+        }
+    }
+
+    func cancelPermanentDelete() {
+        for s in sessions.values { s.cancelPendingDelete() }
+    }
+
+    /// Drops anything that no longer exists from the duplicate and search lists.
+    private func afterRemoval() {
+        let fm = FileManager.default
+        dupGroups = dupGroups.compactMap { g in
+            var g = g
+            g.items.removeAll { !fm.fileExists(atPath: $0.path) }
+            return g.items.count > 1 ? g : nil
+        }
+        searchResults.removeAll { !fm.fileExists(atPath: $0.node.path) }
     }
 
     func addFolder(_ url: URL) {
