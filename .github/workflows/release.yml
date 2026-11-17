@@ -13,6 +13,10 @@ on:
         description: "What changed"
         required: false
         default: "Bug fixes and improvements."
+      runner:
+        description: "Mac runner image (use macos-14 if macos-15 is backed up)"
+        required: false
+        default: "macos-15"
 
 permissions:
   contents: write
@@ -22,7 +26,7 @@ concurrency:
 
 jobs:
   release:
-    runs-on: macos-15
+    runs-on: ${{ inputs.runner || 'macos-15' }}
     env:
       VERSION: ${{ inputs.version }}
       NOTES: ${{ inputs.notes }}
