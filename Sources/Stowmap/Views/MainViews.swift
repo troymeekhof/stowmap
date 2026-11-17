@@ -313,7 +313,13 @@ struct VolumeRow: View {
                             .foregroundStyle(Theme.good.opacity(0.8))
                     }
                 }
-                if v.total > 0 {
+                if session.isScanning {
+                    // While scanning, the capacity bar gives way to scan progress.
+                    ScanBar(fraction: session.scanFraction)
+                    Text(scanStatus)
+                        .font(.system(size: 10, weight: .semibold)).foregroundStyle(Theme.cyan)
+                        .monospacedDigit().lineLimit(1)
+                } else if v.total > 0 {
                     MeterBar(fraction: v.usedFraction, color: Theme.usage(v.usedFraction))
                     Text("\(Fmt.bytes(v.free)) free of \(Fmt.bytes(v.total))")
                         .font(.system(size: 10)).foregroundStyle(Theme.textSecondary).monospacedDigit().lineLimit(1)
@@ -328,6 +334,43 @@ struct VolumeRow: View {
             RoundedRectangle(cornerRadius: 12, style: .continuous)
                 .fill(Color.white.opacity(selected ? 0.09 : 0.0001))
         )
+    }
+
+    private var scanStatus: String {
+        let p = session.progress
+        if let f = session.scanFraction {
+            return "Scanning \(Fmt.pct(f))  ·  \(Fmt.count(p.files)) files"
+        }
+        return "Scanning  ·  \(Fmt.bytes(p.bytes)) mapped"
+    }
+}
+
+/// Scan progress for a drive row: a filling bar when the amount to scan is known, a sliding
+/// one when it isn't (network shares and folders).
+struct ScanBar: View {
+    var fraction: Double?
+    var height: CGFloat = 6
+    @State private var slide = false
+
+    var body: some View {
+        GeometryReader { g in
+            ZStack(alignment: .leading) {
+                Capsule().fill(Color.white.opacity(0.10))
+                if let f = fraction {
+                    Capsule().fill(Theme.brand)
+                        .frame(width: max(height, g.size.width * CGFloat(min(1, max(0, f)))))
+                        .animation(.easeOut(duration: 0.25), value: f)
+                } else {
+                    Capsule().fill(Theme.brand)
+                        .frame(width: g.size.width * 0.35)
+                        .offset(x: slide ? g.size.width * 0.65 : 0)
+                        .animation(.easeInOut(duration: 1.1).repeatForever(autoreverses: true), value: slide)
+                }
+            }
+        }
+        .frame(height: height)
+        .clipShape(Capsule())
+        .onAppear { slide = true }
     }
 }
 
@@ -605,12 +648,7 @@ struct ScanningView: View {
     @ObservedObject var session: ScanSession
     @State private var spin = false
 
-    private var fraction: Double? {
-        let v = session.volume
-        guard v.total > 0 else { return nil }
-        let used = Double(max(1, v.total - v.realFree))
-        return min(0.99, Double(session.progress.bytes) / used)
-    }
+    private var fraction: Double? { session.scanFraction }
 
     private func clock(_ t: TimeInterval) -> String {
         let s = max(0, Int(t))

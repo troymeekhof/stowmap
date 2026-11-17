@@ -138,6 +138,14 @@ final class ScanSession: ObservableObject, Identifiable {
 
     var isScanning: Bool { phase == .scanning }
 
+    /// How far a scan has got, 0…1, when the amount to scan is known. That is only true for a
+    /// whole local drive: a network share reports its server's entire pool, and a folder has no total.
+    var scanFraction: Double? {
+        guard isScanning, volume.total > 0, volume.kind != .network, volume.kind != .folder else { return nil }
+        let used = Double(max(1, volume.total - volume.realFree))
+        return min(0.99, Double(progress.bytes) / used)
+    }
+
     func start() {
         guard phase != .scanning else { return }
         let context = DiskScanner.makeContext(for: volume)
