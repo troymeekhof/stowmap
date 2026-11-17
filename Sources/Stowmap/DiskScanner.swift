@@ -168,29 +168,32 @@ final class ScanContext: @unchecked Sendable {
         var fileCount = 0
         var fileBytes: Int64 = 0
 
-        while let ent = readdir(dir) {
-            let name: String = withUnsafePointer(to: &ent.pointee.d_name) { tuple in
-                tuple.withMemoryRebound(to: CChar.self, capacity: MemoryLayout.size(ofValue: tuple.pointee)) { String(cString: $0) }
-            }
-            if name == "." || name == ".." { continue }
+        // Network shares answer one request per file with the classic calls. Asking for a whole
+        // folder's names and attributes in one request is far fewer round trips, so shares try that
+        // first and fall back if the server doesn't support it.
+        let entries: [DirEntry]
+        if logicalSizes, let bulk = DirLister.bulk(fd: fd) {
+            entries = bulk
+        } else {
+            entries = DirLister.classic(dir: dir, fd: fd)
+        }
 
-            var st = stat()
-            if fstatat(fd, name, &st, AT_SYMLINK_NOFOLLOW) != 0 { continue }
-            let type = st.st_mode & S_IFMT
-            let hidden = name.hasPrefix(".") || (st.st_flags & UInt32(UF_HIDDEN)) != 0
+        for e in entries {
+            let name = e.name
+            let hidden = name.hasPrefix(".") || (e.flags & UInt32(UF_HIDDEN)) != 0
 
-            if type == S_IFDIR {
+            if e.isDirectory {
                 // Stay on this volume; skip folders already reached through another route.
-                guard allowedDevs.contains(st.st_dev) else { continue }
-                guard visit(FileID(dev: st.st_dev, ino: st.st_ino)) else { continue }
+                guard allowedDevs.contains(e.dev) else { continue }
+                guard visit(FileID(dev: e.dev, ino: e.ino)) else { continue }
                 let child = FileNode(name: name, kind: .folder, isHidden: hidden)
                 child.parent = node
                 node.children.append(child)
                 subdirs.append((child, prefix + name))
             } else {
-                var size = Int64(st.st_blocks) * 512
-                if logicalSizes && size == 0 { size = Int64(st.st_size) }
-                if type == S_IFREG && st.st_nlink > 1 && !firstLink(FileID(dev: st.st_dev, ino: st.st_ino)) {
+                var size = e.allocated
+                if logicalSizes && size == 0 { size = e.length }
+                if e.isRegular && e.links > 1 && !firstLink(FileID(dev: e.dev, ino: e.ino)) {
                     size = 0
                 }
                 fileCount += 1
@@ -199,7 +202,7 @@ final class ScanContext: @unchecked Sendable {
                 if size >= local.floor { local.offer(path: prefix + name, size: size) }
                 if size >= smallThreshold {
                     let child = FileNode(name: name, kind: .file, isHidden: hidden, size: size, fileCount: 1)
-                    child.logical = Int64(st.st_size)
+                    child.logical = e.length
                     child.parent = node
                     node.children.append(child)
                 } else {
@@ -229,6 +232,105 @@ final class ScanContext: @unchecked Sendable {
                 scanDir(childPath, child, depth: depth + 1, local: &local)
             }
         }
+    }
+}
+
+/// One item in a folder, with what the scanner needs to know about it.
+struct DirEntry {
+    var name: String
+    var isDirectory: Bool
+    var isRegular: Bool
+    var allocated: Int64        // bytes on disk
+    var length: Int64           // stated length
+    var flags: UInt32
+    var dev: Int32
+    var ino: UInt64
+    var links: UInt32
+}
+
+enum DirLister {
+    /// readdir + one stat per item. Works everywhere.
+    static func classic(dir: UnsafeMutablePointer<DIR>, fd: Int32) -> [DirEntry] {
+        var out: [DirEntry] = []
+        while let ent = readdir(dir) {
+            let name: String = withUnsafePointer(to: &ent.pointee.d_name) { tuple in
+                tuple.withMemoryRebound(to: CChar.self, capacity: MemoryLayout.size(ofValue: tuple.pointee)) { String(cString: $0) }
+            }
+            if name == "." || name == ".." { continue }
+            var st = stat()
+            if fstatat(fd, name, &st, AT_SYMLINK_NOFOLLOW) != 0 { continue }
+            let type = st.st_mode & S_IFMT
+            out.append(DirEntry(name: name, isDirectory: type == S_IFDIR, isRegular: type == S_IFREG,
+                                allocated: Int64(st.st_blocks) * 512, length: Int64(st.st_size),
+                                flags: st.st_flags, dev: st.st_dev, ino: st.st_ino, links: UInt32(st.st_nlink)))
+        }
+        return out
+    }
+
+    // Attribute bits, spelled out (the system headers define them as macros).
+    private static let cmnReturned: UInt32 = 0x8000_0000
+    private static let cmnName: UInt32 = 0x0000_0001
+    private static let cmnDevID: UInt32 = 0x0000_0002
+    private static let cmnObjType: UInt32 = 0x0000_0008
+    private static let cmnFlags: UInt32 = 0x0004_0000
+    private static let cmnFileID: UInt32 = 0x0200_0000
+    private static let fileLinkCount: UInt32 = 0x0000_0001
+    private static let fileAllocSize: UInt32 = 0x0000_0004
+    private static let fileDataLength: UInt32 = 0x0000_0200
+
+    /// Names and attributes for a whole folder in a few calls. Returns nil when the volume doesn't
+    /// support it or anything looks wrong, so the caller can use the classic way instead.
+    /// The descriptor must be freshly opened: this reads from the start of the folder.
+    static func bulk(fd: Int32) -> [DirEntry]? {
+        var attrs = attrlist()
+        attrs.bitmapcount = UInt16(ATTR_BIT_MAP_COUNT)
+        attrs.commonattr = cmnReturned | cmnName | cmnDevID | cmnObjType | cmnFlags | cmnFileID
+        attrs.fileattr = fileLinkCount | fileAllocSize | fileDataLength
+        let size = 256 * 1024
+        let buf = UnsafeMutableRawPointer.allocate(byteCount: size, alignment: 8)
+        defer { buf.deallocate() }
+        var out: [DirEntry] = []
+        var first = true
+        while true {
+            let n = getattrlistbulk(fd, &attrs, buf, size, 0)
+            if n < 0 { return first ? nil : nil }
+            if n == 0 { break }
+            first = false
+            var p = UnsafeRawPointer(buf)
+            let end = p + size
+            for _ in 0..<n {
+                guard p + 24 <= end else { return nil }
+                let length = Int(p.loadUnaligned(as: UInt32.self))
+                guard length >= 24, p + length <= end else { return nil }
+                var f = p + 4
+                let got = f.loadUnaligned(as: attribute_set_t.self)
+                f += MemoryLayout<attribute_set_t>.size
+
+                var e = DirEntry(name: "", isDirectory: false, isRegular: false, allocated: 0, length: 0,
+                                 flags: 0, dev: 0, ino: 0, links: 1)
+                if got.commonattr & cmnName != 0 {
+                    let ref = f.loadUnaligned(as: attrreference_t.self)
+                    let start = f + Int(ref.attr_dataoffset)
+                    guard start >= p, start + Int(ref.attr_length) <= p + length else { return nil }
+                    e.name = String(cString: start.assumingMemoryBound(to: CChar.self))
+                    f += MemoryLayout<attrreference_t>.size
+                }
+                if got.commonattr & cmnDevID != 0 { e.dev = f.loadUnaligned(as: Int32.self); f += 4 }
+                var objType: UInt32 = 0
+                if got.commonattr & cmnObjType != 0 { objType = f.loadUnaligned(as: UInt32.self); f += 4 }
+                if got.commonattr & cmnFlags != 0 { e.flags = f.loadUnaligned(as: UInt32.self); f += 4 }
+                if got.commonattr & cmnFileID != 0 { e.ino = f.loadUnaligned(as: UInt64.self); f += 8 }
+                if got.fileattr & fileLinkCount != 0 { e.links = f.loadUnaligned(as: UInt32.self); f += 4 }
+                if got.fileattr & fileAllocSize != 0 { e.allocated = f.loadUnaligned(as: Int64.self); f += 8 }
+                if got.fileattr & fileDataLength != 0 { e.length = f.loadUnaligned(as: Int64.self); f += 8 }
+                guard f <= p + length, !e.name.isEmpty, got.commonattr & cmnObjType != 0 else { return nil }
+                e.isRegular = objType == 1      // VREG
+                e.isDirectory = objType == 2    // VDIR
+                if e.name != "." && e.name != ".." { out.append(e) }
+                p += length
+            }
+        }
+        return out
     }
 }
 

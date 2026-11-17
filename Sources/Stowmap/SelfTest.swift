@@ -136,6 +136,23 @@ enum SelfTest {
         r = CompareJob().run(original: proj, copy: d2 + "/Proj", full: true, options: cmp)
         check(r.missing.count == 1 && r.different.count == 2 && r.extra.count == 1, "full check also finds the file changed without changing size")
 
+        // 11. The fast folder listing used for network shares must agree with the classic one.
+        func listing(_ path: String, bulk: Bool) -> [String: String]? {
+            guard let dir = opendir(path) else { return nil }
+            defer { closedir(dir) }
+            let entries = bulk ? DirLister.bulk(fd: dirfd(dir)) : DirLister.classic(dir: dir, fd: dirfd(dir))
+            guard let entries else { return nil }
+            var map: [String: String] = [:]
+            for e in entries { map[e.name] = "\(e.isDirectory ? "d" : (e.isRegular ? "f" : "o")) \(e.isRegular ? e.length : 0) \(e.isRegular ? e.allocated : 0) \(e.ino)" }
+            return map
+        }
+        for folder in [proj, proj + "/sub", d1 + "/Proj"] {
+            let fast = listing(folder, bulk: true)
+            let slow = listing(folder, bulk: false)
+            check(fast != nil && fast == slow, "fast folder listing matches the classic one for \((folder as NSString).lastPathComponent)")
+            if fast != slow { print("      fast: \(String(describing: fast))\n      slow: \(String(describing: slow))") }
+        }
+
         // 11. Hardware lookup must not crash; what it reports is informational.
         if let c = Hardware.expected(forPath: base) { print("INFO  this disk looks like \(c.label), about \(Int(c.mbps)) MB/s") }
         else { print("INFO  this disk's class could not be determined") }
