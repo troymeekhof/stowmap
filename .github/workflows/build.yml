@@ -25,6 +25,7 @@ jobs:
       - name: Build universal app (ad-hoc signed)
         run: DMG_OUT="$RUNNER_TEMP/Stowmap.dmg" ./build.sh --package
       - name: Upload DMG
+        continue-on-error: true   # a GitHub storage hiccup shouldn't mark a good build as failed
         uses: actions/upload-artifact@v4
         with:
           name: Stowmap-dmg
