@@ -498,7 +498,7 @@ def copy_done_state():
     def cl(n, sub): return (f'<div class="lane res"><div class="vic" style="color:rgba(255,255,255,.7)">{icon("file-text")}</div><div class="ln2"><b>{n}</b><small>{sub}</small></div>'
                             f'<span class="ib">{icon("magnifying-glass")}</span></div>')
     left = ('<div class="card pane res"><div class="ctitle">Destinations</div>' + dres("Archive 8TB", "/2026", "1,204 files, 312 GB") + dres("Studio NAS", "/Projects/2026", "1,204 files, 312 GB") +
-            '<div class="ctitle gap">Checksum lists, saved in each destination</div>' + cl("Footage SSD 2026-11-17 1416.mhl", "MHL  ·  xxHash64  ·  1,204 entries") +
+            '<div class="ctitle gap">Checksum lists</div>' + cl("Footage SSD 2026-11-17 1416.mhl", "MHL  ·  xxHash64  ·  1,204 entries") +
             cl("Footage SSD 2026-11-17 1416.txt", "Plain text  ·  one line per file") + '</div>')
     done_files = [("A007_C031_1107KT.braw", "", 5.12, "1c6e9b40", "ok")] + [f for f in FILES if f[4] == "ok"] + [("A003_C004_1107KT.braw", "", 6.31, "ab02f7c3", "ok"), ("A003_C003_1107KT.braw", "", 7.12, "60d1e8b5", "ok")]
     right = f'<div class="card list files"><div class="ctitle"><span>Files</span><em>1,204 verified</em></div>{file_rows(done_files, False)}</div>'

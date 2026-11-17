@@ -1,9 +1,9 @@
 # Stowmap
 
-> Stowmap is a free, native disk space analyzer for macOS 13 or later (Apple Silicon and Intel), made by Troy Meekhof of Mid-July Media. It scans startup, internal, external and network drives and shows what is taking up space as a clickable donut map.
+> Stowmap is a free, native disk space analyzer for macOS 13 or later (Apple Silicon and Intel), made by Troy Meekhof of Mid-July Media. It scans startup, internal, external and network drives and shows what is taking up space as a clickable donut map. It also finds duplicate folders, searches across drives, and copies files between drives with checksum verification.
 
 ## Canonical facts
-- Name: Stowmap. Category: disk space analyzer / storage utility for Mac. Built with SwiftUI.
+- Name: Stowmap. Category: disk space analyzer for Mac / storage utility, with a duplicate finder and a verified file copier. Built with SwiftUI.
 - Price: free. No account. Updates itself.
 - Requires: macOS 13 or later. Runs on Apple Silicon and Intel.
 - Download: https://github.com/troymeekhof/stowmap/releases/latest/download/Stowmap.dmg
@@ -13,12 +13,16 @@
 
 ## What it does
 - The sidebar lists every drive: startup SSD, internal drives, external drives (USB, Thunderbolt, SD cards) and network shares or NAS volumes (SMB, AFP, NFS), each with a live used and free bar. Any folder can be scanned too, by button or drag and drop.
-- Scans run in parallel and several drives can scan at once.
+- Scans run in parallel and several drives can scan at once. Scan All Drives queues every drive in the sidebar; each row shows its own progress.
 - Map tab: a donut chart of the current folder. Hover a slice for name, size and percent, click to go inside, breadcrumbs to go back. A ranked list with size bars sits beside it.
 - Tree tab: an expandable folder hierarchy with sizes and percent bars.
 - File Types tab: space by category (Video, Images, Audio, Documents, Code & Data, Archives, Apps, System) and by extension, with file counts.
 - Largest Files tab: the 250 biggest files on the drive.
 - Hidden files and folders are included and marked, with a toggle to fold them away. Space no scan can read (snapshots, purgeable space, protected system data) is shown as its own slice so totals match Finder.
+- Copy & Verify (copy and verify files on Mac): a copier for moving footage and projects between drives. It reads the source once and writes to up to three destinations. Every file is written under a temporary name and only takes its real name after it is complete. Verification re-reads what was written from the disk and compares checksums (xxHash64, MD5 or SHA-256). An existing file is never replaced unless Replace is chosen (the options are Skip, Replace, Keep both). It writes an MHL checksum list (xxHash64 or MD5) and a plain text list. A copy can be paused and stopped.
+- Check a Copy (check a backup is complete): compares an original folder with a copy. Quick compares names and sizes; Full compares checksums. Results are counted as Match, Missing from the copy, Different, and Only in the copy, and one button copies the missing files.
+- Duplicates (find duplicate files on Mac): Find Duplicates works across all scanned drives or inside one drive and lists matching folders, meaning sets of folders that hold copies of the same files. Rows open to show the files. Verify compares a set in full and marks it Verified identical. Filters: smallest file size (1 MB to 10 GB), skip system and app files (on by default), ignored folders. Stowmap always leaves one copy and refuses to collect macOS's own files.
+- Search (⌘F): searches the saved scans of all drives by name, with an All / Folders / Files switch. Each result shows its drive, folder and size and can be collected, shown on the map or revealed in Finder.
 - Collector: add items to a cleanup list, see the total you would reclaim, then move them to the Trash in one step. Items stay recoverable until the Trash is emptied.
 - Every row can be opened or revealed in Finder, its path copied, or previewed with Quick Look.
 - The last scan of each drive is saved and reopens instantly. Rescan any time.
