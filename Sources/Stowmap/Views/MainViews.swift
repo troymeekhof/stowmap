@@ -14,12 +14,19 @@ struct ContentView: View {
                 .frame(width: 250)
             Rectangle().fill(Color.white.opacity(0.06)).frame(width: 1)
             Group {
-                if let session = model.selected {
-                    DetailView(session: session)
-                        .id(session.id)
-                        .transition(.opacity)
-                } else {
-                    EmptyState()
+                switch model.pane {
+                case .search:
+                    SearchView().transition(.opacity)
+                case .duplicates:
+                    DuplicatesView().transition(.opacity)
+                case .drive:
+                    if let session = model.selected {
+                        DetailView(session: session)
+                            .id(session.id)
+                            .transition(.opacity)
+                    } else {
+                        EmptyState()
+                    }
                 }
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity)
@@ -62,6 +69,7 @@ private struct EmptyState: View {
 struct Sidebar: View {
     @EnvironmentObject var model: AppModel
     @EnvironmentObject var updater: Updater
+    @FocusState private var searchFocused: Bool
 
     private let groups: [(title: String, kinds: [Volume.Kind])] = [
         ("Internal", [.boot, .internalDrive]),
@@ -82,7 +90,9 @@ struct Sidebar: View {
                     .frame(width: 26, height: 26)
                 Text("Stowmap").font(.system(size: 19, weight: .bold, design: .rounded))
             }
-            .padding(.top, 38).padding(.horizontal, 18).padding(.bottom, 14)
+            .padding(.top, 38).padding(.horizontal, 18).padding(.bottom, 12)
+
+            tools
 
             ScrollView {
                 VStack(alignment: .leading, spacing: 14) {
@@ -97,10 +107,13 @@ struct Sidebar: View {
                                     .padding(.horizontal, 8)
                                 ForEach(vols) { v in
                                     if let session = model.sessions[v.id] {
-                                        VolumeRow(session: session, selected: model.selectedID == v.id)
+                                        VolumeRow(session: session, selected: model.pane == .drive && model.selectedID == v.id)
                                             .contentShape(Rectangle())
                                             .onTapGesture {
-                                                withAnimation(.easeOut(duration: 0.18)) { model.selectedID = v.id }
+                                                withAnimation(.easeOut(duration: 0.18)) {
+                                                    model.selectedID = v.id
+                                                    model.pane = .drive
+                                                }
                                             }
                                             .contextMenu {
                                                 Button("Open in Finder") { Finder.open(v.path) }
@@ -146,6 +159,60 @@ struct Sidebar: View {
             .padding(12)
         }
         .background(Color.black.opacity(0.18))
+    }
+
+    /// Search box and Duplicates: the two tools that look across every drive.
+    private var tools: some View {
+        VStack(spacing: 6) {
+            HStack(spacing: 7) {
+                Image(systemName: "magnifyingglass").font(.system(size: 11, weight: .semibold))
+                    .foregroundStyle(Theme.textSecondary)
+                TextField("Search all drives", text: $model.searchText)
+                    .textFieldStyle(.plain).font(.system(size: 12.5))
+                    .focused($searchFocused)
+                    .onSubmit {
+                        model.pane = .search
+                        model.runSearch()
+                    }
+                if !model.searchText.isEmpty {
+                    Button { model.clearSearch() } label: {
+                        Image(systemName: "xmark.circle.fill").font(.system(size: 11))
+                            .foregroundStyle(Theme.textTertiary)
+                    }
+                    .buttonStyle(.plain).help("Clear search")
+                }
+            }
+            .padding(.horizontal, 10).padding(.vertical, 7)
+            .background(RoundedRectangle(cornerRadius: 9, style: .continuous)
+                .fill(Color.white.opacity(model.pane == .search ? 0.10 : 0.06)))
+
+            Button {
+                withAnimation(.easeOut(duration: 0.18)) { model.pane = .duplicates }
+            } label: {
+                HStack(spacing: 8) {
+                    Image(systemName: "doc.on.doc.fill").font(.system(size: 11, weight: .semibold))
+                        .foregroundStyle(model.pane == .duplicates ? Color.white : Theme.textSecondary)
+                    Text("Duplicates").font(.system(size: 12.5, weight: .semibold))
+                    Spacer(minLength: 0)
+                    if !model.dupGroups.isEmpty {
+                        Text(Fmt.count(model.dupGroups.count)).font(.system(size: 10.5, weight: .semibold, design: .rounded))
+                            .monospacedDigit().foregroundStyle(Theme.textSecondary)
+                    }
+                }
+                .padding(.horizontal, 10).padding(.vertical, 7)
+                .background(RoundedRectangle(cornerRadius: 9, style: .continuous)
+                    .fill(Color.white.opacity(model.pane == .duplicates ? 0.10 : 0.0001)))
+                .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            .help("Find identical files across the drives you've scanned")
+        }
+        .padding(.horizontal, 10).padding(.bottom, 12)
+        .background {
+            Button("") { searchFocused = true }
+                .keyboardShortcut("f", modifiers: .command)
+                .opacity(0).frame(width: 0, height: 0)
+        }
     }
 }
 

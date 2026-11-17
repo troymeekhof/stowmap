@@ -10,6 +10,7 @@ private struct CachedNode: Codable {
     var s: Int64
     var c: Int
     var ch: [CachedNode]?
+    var l: Int64? = nil      // file length, for duplicate matching (absent in older saves)
 }
 
 private struct CachedScan: Codable {
@@ -50,12 +51,13 @@ enum ScanStore {
                                    s: restBytes, c: restCount, ch: nil))
         }
         return CachedNode(n: n.name, k: n.kind.rawValue, h: n.isHidden, s: n.size, c: n.fileCount,
-                          ch: kids.isEmpty ? nil : kids)
+                          ch: kids.isEmpty ? nil : kids, l: n.logical > 0 ? n.logical : nil)
     }
 
     private static func unpack(_ c: CachedNode) -> FileNode {
         let node = FileNode(name: c.n, kind: FileNode.Kind(rawValue: c.k) ?? .file, isHidden: c.h,
                             size: c.s, fileCount: c.c)
+        node.logical = c.l ?? 0
         if let ch = c.ch {
             node.children = ch.map { sub in
                 let k = unpack(sub)
@@ -352,6 +354,29 @@ final class AppModel: ObservableObject {
     @Published var selectedID: String?
     @Published private(set) var sessions: [String: ScanSession] = [:]
 
+    /// What the main area shows: one drive's map, search results, or duplicates.
+    enum Pane { case drive, search, duplicates }
+    @Published var pane: Pane = .drive
+
+    // Search across every scanned drive
+    @Published var searchText = ""
+    @Published var searchKind = 0                    // 0 all, 1 folders, 2 files
+    @Published private(set) var searchResults: [SearchHit] = []
+    @Published private(set) var searchTotal = 0
+    @Published private(set) var searchBusy = false
+    @Published private(set) var searchedFor = ""
+    private var searchToken = 0
+
+    // Duplicates across every scanned drive
+    enum DupPhase { case idle, running, done }
+    @Published private(set) var dupPhase: DupPhase = .idle
+    @Published private(set) var dupGroups: [DupGroup] = []
+    @Published private(set) var dupProgress = DupProgress()
+    @Published private(set) var dupVerifying = Set<Int>()
+    @Published var toolError: String?
+    private var dupScan: DuplicateScan?
+    private var dupTimer: Timer?
+
     private var observers: [NSObjectProtocol] = []
     private var timer: Timer?
     private let foldersKey = "scanFolders"
@@ -436,6 +461,149 @@ final class AppModel: ObservableObject {
         return sessions.values
             .filter { $0.volume.poolKey == key && $0.volume.id != volume.id && $0.result == nil }
             .map { $0.volume.name }.sorted()
+    }
+
+    // MARK: search
+
+    /// Every drive that has a map, newest scans included as they are.
+    func scannedRoots() -> [TreeRoot] {
+        sessions.values.compactMap { s -> TreeRoot? in
+            guard let r = s.result else { return nil }
+            return TreeRoot(id: s.volume.id, name: s.volume.name, root: r.root, date: r.date, fromCache: r.fromCache)
+        }
+        .sorted { $0.name.localizedCaseInsensitiveCompare($1.name) == .orderedAscending }
+    }
+
+    var unscannedNames: [String] {
+        sessions.values.filter { $0.result == nil }.map { $0.volume.name }.sorted()
+    }
+
+    func runSearch() {
+        let q = searchText.trimmingCharacters(in: .whitespaces)
+        searchToken += 1
+        guard !q.isEmpty else {
+            searchResults = []; searchTotal = 0; searchedFor = ""; searchBusy = false
+            return
+        }
+        let token = searchToken
+        let roots = scannedRoots()
+        let kind = searchKind
+        searchBusy = true
+        DispatchQueue.global(qos: .userInitiated).async { [weak self] in
+            let out = TreeSearch.run(query: q, roots: roots, kind: kind)
+            Task { @MainActor in self?.finishSearch(out, query: q, token: token) }
+        }
+    }
+
+    private func finishSearch(_ out: SearchOutcome, query: String, token: Int) {
+        guard token == searchToken else { return }      // a newer search replaced this one
+        searchResults = out.hits
+        searchTotal = out.total
+        searchedFor = query
+        searchBusy = false
+    }
+
+    func clearSearch() {
+        searchText = ""
+        runSearch()
+        if pane == .search { pane = .drive }
+    }
+
+    /// Jump to a folder on its drive's map.
+    func showOnMap(volumeID: String, folderPath: String) {
+        guard let s = sessions[volumeID] else { return }
+        selectedID = volumeID
+        pane = .drive
+        s.show(path: folderPath)
+    }
+
+    // MARK: duplicates
+
+    func findDuplicates(minSize: Int64) {
+        guard dupPhase != .running else { return }
+        let roots = scannedRoots()
+        let scan = DuplicateScan()
+        dupScan = scan
+        dupGroups = []
+        dupProgress = DupProgress()
+        dupPhase = .running
+        dupTimer?.invalidate()
+        dupTimer = Timer.scheduledTimer(withTimeInterval: 0.2, repeats: true) { [weak self] _ in
+            let p = scan.snapshot()
+            Task { @MainActor in self?.dupProgress = p }
+        }
+        DispatchQueue.global(qos: .userInitiated).async { [weak self] in
+            let groups = DuplicateFinder.run(roots: roots, minSize: minSize, scan: scan)
+            let cancelled = scan.isCancelled
+            Task { @MainActor in self?.finishDuplicates(groups, cancelled: cancelled) }
+        }
+    }
+
+    func cancelDuplicates() { dupScan?.cancel() }
+
+    private func finishDuplicates(_ groups: [DupGroup], cancelled: Bool) {
+        dupTimer?.invalidate()
+        dupTimer = nil
+        dupScan = nil
+        dupGroups = cancelled ? [] : groups
+        dupPhase = cancelled ? .idle : .done
+    }
+
+    /// Reads every copy in a group from start to end and compares them.
+    func verifyGroup(_ id: Int) {
+        guard let g = dupGroups.first(where: { $0.id == id }), !dupVerifying.contains(id) else { return }
+        dupVerifying.insert(id)
+        let paths = g.items.map(\.path)
+        DispatchQueue.global(qos: .utility).async { [weak self] in
+            let same = DuplicateFinder.identical(paths)
+            Task { @MainActor in self?.finishVerify(id, same) }
+        }
+    }
+
+    private func finishVerify(_ id: Int, _ same: Bool?) {
+        dupVerifying.remove(id)
+        guard let i = dupGroups.firstIndex(where: { $0.id == id }) else { return }
+        switch same {
+        case .some(true): dupGroups[i].state = .identical
+        case .some(false): dupGroups[i].state = .different
+        case .none: dupGroups[i].state = .unreadable
+        }
+    }
+
+    // MARK: collector, across drives
+
+    func isCollected(_ node: FileNode, in volumeID: String) -> Bool {
+        sessions[volumeID]?.isCollected(node) ?? false
+    }
+
+    func toggleCollect(_ node: FileNode, in volumeID: String) {
+        sessions[volumeID]?.toggleCollect(node)
+        objectWillChange.send()
+    }
+
+    var collectedCount: Int { sessions.values.reduce(0) { $0 + $1.collected.count } }
+    var collectedBytes: Int64 { sessions.values.reduce(Int64(0)) { $0 + $1.collectedBytes } }
+
+    func clearAllCollected() {
+        for s in sessions.values { s.clearCollected() }
+        objectWillChange.send()
+    }
+
+    /// Moves every collected item on every drive to the Trash, then drops what's gone from the lists.
+    func trashAllCollected() {
+        var errors: [String] = []
+        for s in sessions.values where !s.collected.isEmpty {
+            s.trashCollected()
+            if let e = s.trashError { errors.append(e); s.trashError = nil }
+        }
+        let fm = FileManager.default
+        dupGroups = dupGroups.compactMap { g in
+            var g = g
+            g.items.removeAll { !fm.fileExists(atPath: $0.path) }
+            return g.items.count > 1 ? g : nil
+        }
+        searchResults.removeAll { !fm.fileExists(atPath: $0.node.path) }
+        if !errors.isEmpty { toolError = errors.joined(separator: "\n") }
     }
 
     func addFolder(_ url: URL) {

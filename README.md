@@ -35,6 +35,9 @@ Stowmap checks for a new version once a day. Gear menu → **Check for Updates�
 - **Tree.** The whole hierarchy as an expandable outline with sizes and percent bars, plus search by name.
 - **File Types.** Space by category (Video, Images, Audio, Documents, Code & Data, Archives,
   Apps, System) and by extension, with file counts.
+- **Search.** One box (⌘F) finds files and folders by name on every drive you've scanned, largest first.
+- **Duplicates.** Finds identical files across drives: same size, then matching samples from the start,
+  middle and end, then a full byte-for-byte check when you ask. Always leaves one copy of each set.
 - **Largest Files.** The 250 biggest files on the drive, filterable, with a jump to their folder on the map.
 - **Collector.** Add items to a list, see what you'd reclaim, move them to the Trash in one step.
   Nothing is deleted permanently; put-back works until you empty the Trash.
@@ -71,9 +74,11 @@ Package.swift                         SwiftPM, macOS 13, Sparkle 2
 Sources/Stowmap/StowmapApp.swift      @main, window, menu commands, Sparkle updater
 Sources/Stowmap/Model.swift           FileNode tree, file-type table, Volume, formatters
 Sources/Stowmap/DiskScanner.swift     parallel walker, type stats, largest-files tracking
+Sources/Stowmap/Tools.swift           search and duplicate matching across drives
 Sources/Stowmap/AppModel.swift        volume discovery, ScanSession (scan/navigate/collect), saved index, Finder actions
 Sources/Stowmap/Views/Theme.swift     colours, Card, buttons, GlassTabs, row pieces
 Sources/Stowmap/Views/MainViews.swift window, sidebar, header, idle/scanning states, collector bar
+Sources/Stowmap/Views/ToolViews.swift search results and duplicates screens
 Sources/Stowmap/Views/Tabs.swift      donut chart, Map / Tree / File Types / Largest Files
 Resources/                            Info.plist, Stowmap.icns, make_icon.py
 build.sh / release.sh / appcast.xml   build, ship an update, update feed

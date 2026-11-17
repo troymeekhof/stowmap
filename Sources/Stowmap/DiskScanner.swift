@@ -199,6 +199,7 @@ final class ScanContext: @unchecked Sendable {
                 if size >= local.floor { local.offer(path: prefix + name, size: size) }
                 if size >= smallThreshold {
                     let child = FileNode(name: name, kind: .file, isHidden: hidden, size: size, fileCount: 1)
+                    child.logical = Int64(st.st_size)
                     child.parent = node
                     node.children.append(child)
                 } else {

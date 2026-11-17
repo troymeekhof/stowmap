@@ -21,6 +21,7 @@ final class FileNode: Identifiable, @unchecked Sendable {
     var rootPath: String?          // set on the root node only
     var unreadable = false         // permission denied while listing
     var linkedVolumeID: String?    // an entry standing in for another share on the same server
+    var logical: Int64 = 0         // files: stated length in bytes (0 = not recorded); used to match copies across drives
 
     init(name: String, kind: Kind, isHidden: Bool = false, size: Int64 = 0, fileCount: Int = 0) {
         self.name = name
