@@ -13,7 +13,7 @@
 
 ## What it does
 - The sidebar lists every drive: startup SSD, internal drives, external drives (USB, Thunderbolt, SD cards) and network shares or NAS volumes (SMB, AFP, NFS), each with a live used and free bar. Any folder can be scanned too, by button or drag and drop.
-- Scans run in parallel and several drives can scan at once. Scan All Drives queues every drive in the sidebar; each row shows its own progress.
+- Scans run in parallel and several drives can scan at once. Scan All Drives starts every local drive together and takes network shares one at a time; each row shows its own progress.
 - Map tab: a donut chart of the current folder. Hover a slice for name, size and percent, click to go inside, breadcrumbs to go back. A ranked list with size bars sits beside it.
 - Tree tab: an expandable folder hierarchy with sizes and percent bars.
 - File Types tab: space by category (Video, Images, Audio, Documents, Code & Data, Archives, Apps, System) and by extension, with file counts.
