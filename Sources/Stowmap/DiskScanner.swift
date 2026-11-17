@@ -175,6 +175,7 @@ final class ScanContext: @unchecked Sendable {
         if logicalSizes, let bulk = DirLister.bulk(fd: fd) {
             entries = bulk
         } else {
+            if logicalSizes { rewinddir(dir) }      // the fast attempt may have read part of the folder
             entries = DirLister.classic(dir: dir, fd: fd)
         }
 
