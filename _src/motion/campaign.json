@@ -1,6 +1,6 @@
 {
  "project": "stowmap-launch",
- "version": "1.0.0",
+ "version": "1.3.0",
  "fps": 30,
  "brand": {
   "name": "Stowmap",
@@ -57,25 +57,26 @@
     "source": "product brief"
    }
   ],
-  "note": "Numbers inside the app window are sample data from the interface design, not claims."
+  "note": "Numbers inside the app window (sizes, speeds, file counts) are sample data from the interface design, not claims. No speed is stated in page copy."
  },
  "scenes": {
   "hero": {
    "w": 1920,
    "h": 1080,
-   "dur": 18,
+   "dur": 22,
    "beats": [
     "title 0-2.2",
     "scan 2.3-5.1",
     "map + drill 5.1-10.4",
-    "collect + trash 10.4-15",
-    "end card 15.6-18"
+    "collect + trash 10.4-14.6",
+    "Copy & Verify 14.9-19.5",
+    "end card 19.5-22"
    ],
-   "web_cut": "The page plays stowmap-hero (from 2.2 s, 15.8 s long): the title card is dropped because the page's own h1 sits right above the video. stowmap-launch.mp4 is the full 18 s cut with the title card, for sharing."
+   "web_cut": "The page plays stowmap-hero (from 2.2 s, 19.8 s long): the title card is dropped because the page's own h1 sits right above the video. stowmap-launch.mp4 is the full 22 s cut with the title card, for sharing."
   },
   "scan": {
-   "w": 1200,
-   "h": 1000,
+   "w": 1000,
+   "h": 1170,
    "dur": 9.5,
    "beats": [
     "pick a drive",
@@ -104,6 +105,30 @@
     "collect three hidden folders",
     "total adds up",
     "Move to Trash"
+   ]
+  },
+  "copy": {
+   "w": 1200,
+   "h": 994,
+   "dur": 12.6,
+   "beats": [
+    "sources and two destinations chosen",
+    "Start Copy",
+    "ring fills, speed graph draws",
+    "Verifying",
+    "All files verified",
+    "New Copy resets"
+   ]
+  },
+  "dups": {
+   "w": 1200,
+   "h": 994,
+   "dur": 9,
+   "beats": [
+    "Find Duplicates",
+    "folder rows appear",
+    "one row verifies",
+    "collect one side"
    ]
   }
  },
@@ -170,7 +195,11 @@
     "sub": "776.4 GB free of 2 TB",
     "scanned": true,
     "head": "External  ·  APFS  ·  1.22 TB used of 2 TB  ·  776.4 GB free",
-    "files": "862K files"
+    "files": "862K files",
+    "used": 1220,
+    "fileCount": 862104,
+    "elapsed": 41,
+    "ticks": 18
    },
    "arc": {
     "name": "Archive 8TB",
@@ -410,6 +439,184 @@
      }
     ]
    }
+  },
+  "copy": {
+   "from": "ssd",
+   "total": 312,
+   "files": "1,204",
+   "filesN": 1204,
+   "seconds": 860,
+   "time": "14 min 20 s",
+   "avg": "362 MB/s",
+   "ticks": 30,
+   "sources": [
+    {
+     "n": "A-Cam",
+     "p": "/2026/11 Lakeshore Wedding",
+     "s": 148.6,
+     "c": 412
+    },
+    {
+     "n": "B-Cam",
+     "p": "/2026/11 Lakeshore Wedding",
+     "s": 41.2,
+     "c": 186
+    },
+    {
+     "n": "Drone",
+     "p": "/2026/11 Lakeshore Wedding",
+     "s": 22.6,
+     "c": 84
+    },
+    {
+     "n": "Footage",
+     "p": "/2026/10 Brand Film",
+     "s": 71.3,
+     "c": 212
+    },
+    {
+     "n": "Audio",
+     "p": "/2026/10 Brand Film",
+     "s": 6.4,
+     "c": 96
+    },
+    {
+     "n": "Project Files",
+     "p": "/2026/10 Brand Film",
+     "s": 21.9,
+     "c": 214
+    }
+   ],
+   "dests": [
+    {
+     "k": "arc",
+     "p": "/2026",
+     "used": 0.931,
+     "add": 0.039,
+     "free": "548.1 GB free",
+     "after": "236.1 GB after this copy"
+    },
+    {
+     "k": "nas",
+     "p": "/Projects/2026",
+     "used": 0.483,
+     "add": 0.009,
+     "free": "18.6 TB free",
+     "after": "18.3 TB after this copy"
+    }
+   ]
+  },
+  "dups": {
+   "idle": "Checks the drives you have scanned for folders that hold the same files.",
+   "prompt": "Stowmap compares the saved scans of your drives and lists folders that hold copies of the same files.",
+   "summary": "14 matching folders  ·  412.6 GB to free  ·  one copy of everything always stays",
+   "sets": [
+    {
+     "n": "11 Lakeshore Wedding",
+     "locs": [
+      [
+       "ssd",
+       "/2026/11 Lakeshore Wedding"
+      ],
+      [
+       "nas",
+       "/Projects/2026/11 Lakeshore Wedding"
+      ]
+     ],
+     "per": 212.4,
+     "files": "682"
+    },
+    {
+     "n": "10 Brand Film",
+     "locs": [
+      [
+       "ssd",
+       "/2026/10 Brand Film"
+      ],
+      [
+       "nas",
+       "/Projects/2026/10 Brand Film"
+      ]
+     ],
+     "per": 99.6,
+     "files": "522"
+    },
+    {
+     "n": "Card 03",
+     "locs": [
+      [
+       "mac",
+       "/Users/alex/Movies/Imports/A-Cam Card 03"
+      ],
+      [
+       "ssd",
+       "/2026/11 Lakeshore Wedding/A-Cam/Card 03"
+      ]
+     ],
+     "per": 38.9,
+     "files": "6"
+    },
+    {
+     "n": "Drone Raw",
+     "locs": [
+      [
+       "mac",
+       "/Users/alex/Movies/Drone Raw"
+      ],
+      [
+       "nas",
+       "/Projects/2026/11 Lakeshore Wedding/Drone"
+      ]
+     ],
+     "per": 15.4,
+     "files": "84"
+    },
+    {
+     "n": "Stems",
+     "locs": [
+      [
+       "ssd",
+       "/2026/10 Brand Film/Audio/Stems"
+      ],
+      [
+       "fold",
+       "/2026/Brand Film/Audio"
+      ]
+     ],
+     "per": 4.6,
+     "files": "37"
+    },
+    {
+     "n": "Lightroom Catalog Backups",
+     "locs": [
+      [
+       "mac",
+       "/Users/alex/Pictures/Lightroom/Backups"
+      ],
+      [
+       "nas",
+       "/Backups/Lightroom"
+      ]
+     ],
+     "per": 3.9,
+     "files": "28"
+    },
+    {
+     "n": "Session Mixes",
+     "locs": [
+      [
+       "mac",
+       "/Users/alex/Music/Sessions"
+      ],
+      [
+       "nas",
+       "/Projects/Audio/Sessions"
+      ]
+     ],
+     "per": 2.8,
+     "files": "112"
+    }
+   ]
   }
  }
 }

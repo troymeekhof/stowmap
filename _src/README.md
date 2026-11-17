@@ -12,18 +12,21 @@
 
 Everything that looks like the app is drawn from the app's interface design (`design/interface.html` and `design/interface.css` in the repo root). `interface.css` here is a verbatim copy; `stowmap-ui.js` is a JavaScript port of `design/build.py` so the same markup can be animated. If the design changes, copy the CSS again, update the port, and re-render.
 
-- `campaign.json`: brand, copy and sample data. `scenes.js`: the four scenes, each a pure function of time. `stage.html`: the page that draws one frame (`window.seek(t)`).
+- `campaign.json`: brand, copy and sample data. `scenes.js`: the six scenes (`hero`, `scan`, `drill`, `collect`, `copy`, `dups`), each a pure function of time. `stage.html`: the page that draws one frame (`window.seek(t)`).
 - Render (needs Playwright and ffmpeg):
 
       python3 -m http.server 8777 -d docs &
       export NODE_PATH=$(npm root -g)
-      node docs/_src/motion/render.js hero out/hero        # also: scan, drill, collect  -> out/<name>.mp4
+      node docs/_src/motion/render.js hero out/stowmap-launch              # the full cut, with the title card
+      node docs/_src/motion/render.js hero out/stowmap-hero --from 2.2     # the cut the page plays
+      node docs/_src/motion/render.js copy out/stowmap-copy                # also: dups (-> stowmap-duplicates), scan, drill, collect
       node docs/_src/motion/still.js og docs/assets/img/og.png
-      node docs/_src/motion/still.js hero poster.png --t 9.3 --nocursor 1
+      node docs/_src/motion/still.js hero poster.png --t 9.3 --nocursor 1   # posters: copy 10.7, dups 7.95, scan 6.8
 
-  WebM copies: `ffmpeg -i x.mp4 -c:v libvpx-vp9 -crf 34 -b:v 0 -an x.webm`.
-- The four tab stills in `assets/img/view-*.webp` are the design's own renders (`design/shots/*.png`), resized.
+  MP4 is H.264 at CRF 24 (the script default). WebM copies: `ffmpeg -i x.mp4 -c:v libvpx-vp9 -crf 34 -b:v 0 -an x.webm`. Posters are a JPEG and a WebP of one frame at the clip's size.
+- The four tab stills in `assets/img/view-*.webp` are the design's own renders (`design/shots/*.png`), resized. `check-copy-*.webp` and `search-*.webp` are the main pane of the same renders (crop x 516 to 2400 of the 2400 px shot, the camera the pane clips use). The `view-*-crop-880` phone crops show no sidebar and were left as they were.
+- The numbers inside the window (sizes, speeds, counts) are sample data from the design. Page copy states no speed.
 - `qc/` holds the contact sheets and the QC report for the current renders.
 - Icons are Phosphor (fill), MIT.
 
-`_qa/` holds review screenshots and can be deleted.
+Review screenshots go in `.qa/` at the repo root (ignored by git), never in `docs/`.

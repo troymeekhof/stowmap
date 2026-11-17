@@ -61,7 +61,7 @@
   function coll(t, adds, exitAt) {
     if (t < adds[0].at) return null;
     let count = 0, size = 0; const items = [];
-    for (const a of adds) if (t >= a.at) { count++; size += a.s * E.out(clamp((t - a.at) / 0.32)); items.push({ n: a.n, s: a.s, k: E.arrive(clamp((t - a.at - 0.05) / 0.4)) }); }
+    for (const a of adds) if (t >= a.at) { count++; size += a.s * E.out(clamp((t - a.at) / 0.32)); items.push({ n: a.n, s: a.s, e: a.e, k: E.arrive(clamp((t - a.at - 0.05) / 0.4)) }); }
     const show = Math.min(E.arrive(clamp((t - adds[0].at) / 0.5)), exitAt == null ? 1 : 1 - E.io(clamp((t - exitAt) / 0.45)));
     return { count, size, items, show };
   }
@@ -73,14 +73,14 @@
   const S = {};
 
   // ---------------------------------------------------------------- scan
-  // Camera: left 667 px of a 1200x556 window (sidebar + the left card).
+  // Camera: left 651 px of the 1200x780 window (the whole sidebar + the left card).
   S.scan = function () {
-    const sc = { w: 1200, h: 1000, dur: 9.5, win: { x: 0, y: 0, s: 1.8 }, L: { W: 1200, H: 556, donut: 292 } };
+    const sc = { w: 1000, h: 1198, dur: 9.5, win: { x: 0, y: 0, s: 1000 / 651 }, L: { W: 1200, H: 780 } };
     const M = { drive: 'mac', view: 'map', path: ['Users', 'alex'] };
     const I = { drive: 'arc', view: 'idle' };
     const A = { drive: 'arc', view: 'map', path: [], pills: ['Scanned just now', '412K files'], scanned: { arc: true } };
     sc.frame = function (t) {
-      const P0 = local(sc, 318, 506);
+      const P0 = local(sc, 318, 706);
       const kfs = [
         { t: 0.95, d: 0.7, p: pt(sc, 'M', M, 'vol-arc', 0.84, 0.62) },
         { t: 2.3, d: 0.8, p: pt(sc, 'I', I, 'btn-scan', 0.84, 0.72) },
@@ -152,9 +152,64 @@
     return sc;
   };
 
+  // ---------------------------------------------------------------- copy
+  // Copy & Verify: setup -> Start Copy -> ring fills while the speed graph draws -> Verifying -> all verified -> New Copy.
+  const CBASE = { drive: 'mac', sel: 'copy', view: 'copy' };
+  const CSET = Object.assign({}, CBASE, { copy: { phase: 'setup' } });
+  const crun = tf => Object.assign({}, CBASE, { copy: { phase: 'run', tf } });
+  const cdone = k => Object.assign({}, CBASE, { copy: { phase: 'done', k } });
+  S.copy = function () {
+    const sc = Object.assign(PANE(), { dur: 12.6 });
+    sc.frame = function (t) {
+      const P0 = local(sc, 900, 742), D1 = cdone(1);
+      const kfs = [
+        { t: 1.5, d: 0.8, p: pt(sc, 'CSET', CSET, 'btn-start', 0.85, 0.62) },
+        { t: 10.5, d: 0.01, p: local(sc, 1010, 470) },
+        { t: 11.55, d: 0.75, p: pt(sc, 'CDONE', D1, 'btn-new', 0.85, 0.62) },
+        { t: 12.5, d: 0.6, p: P0 }
+      ];
+      const presses = [{ id: 'btn-start', at: 1.6 }, { id: 'btn-new', at: 11.7 }];
+      const st = view(t, [{ at: 0, st: CSET }, { at: 1.72, st: crun(seg(t, 1.9, 7.5)) }, { at: 9.55, st: cdone(E.arrive(seg(t, 9.65, 0.6))) }, { at: 11.82, st: CSET }]);
+      st.pressed = press(t, presses);
+      const c = cursor(t, P0, kfs);
+      const a = t < 10.4 ? 1 - seg(t, 2.3, 0.3) : seg(t, 10.55, 0.3);
+      return { st, cursor: { x: c[0], y: c[1], k: pressK(t, presses), a } };
+    };
+    return sc;
+  };
+
+  // ---------------------------------------------------------------- dups
+  // Duplicates: Find Duplicates -> matching folders arrive -> one set verifies -> one side goes to the collector.
+  S.dups = function () {
+    const sc = Object.assign(PANE(), { dur: 9 });
+    const B = { drive: 'mac', sel: 'dups', view: 'dups' };
+    const I = Object.assign({}, B, { dups: {} }), F = Object.assign({}, B, { dups: { found: true } });
+    sc.frame = function (t) {
+      const P0 = local(sc, 1000, 128);
+      const kfs = [
+        { t: 0.85, d: 0.6, p: pt(sc, 'DI', I, 'btn-find', 0.85, 0.62) },
+        { t: 3.5, d: 0.85, p: pt(sc, 'DF', F, 'ver-0', 0.85, 0.62) },
+        { t: 6.9, d: 0.8, p: pt(sc, 'DF', F, 'side-0-0', 0.62, 0.66) },
+        { t: 8.5, d: 0.75, p: P0 }
+      ];
+      const presses = [{ id: 'btn-find', at: 0.9 }, { id: 'ver-0', at: 3.6 }, { id: 'side-0-0', at: 7.0 }];
+      const tt = t >= 8.72 ? -1 : t; // after the cut under cover the pane is back at its opening state
+      const d = {};
+      if (tt >= 1.02 && tt < 2.1) { d.finding = E.io(seg(tt, 1.02, 0.95)); d.pa = 1 - seg(tt, 1.95, 0.15); }
+      if (tt >= 2.1) { d.found = true; d.tau = tt - 2.1; d.ver = {}; if (tt >= 3.72) d.ver[0] = tt < 5.9 ? seg(tt, 3.72, 2.1) : 'done'; if (tt >= 7.1) d.side = [0, 0]; }
+      const st = Object.assign({}, B, { dups: d });
+      if (tt >= 7.1) st.coll = coll(tt, [{ at: 7.1, n: '11 Lakeshore Wedding', s: 212.4, e: 'on Footage SSD  ·  212.4 GB' }], null);
+      if (t > 8.45) st.bodyAlpha = t < 8.72 ? 1 - seg(t, 8.45, 0.25) : E.out(seg(t, 8.74, 0.26));
+      st.pressed = press(t, presses);
+      const c = cursor(t, P0, kfs);
+      return { st, cursor: { x: c[0], y: c[1], k: pressK(t, presses), a: 1 } };
+    };
+    return sc;
+  };
+
   // ---------------------------------------------------------------- hero
   S.hero = function () {
-    const sc = { w: 1920, h: 1080, dur: 18, win: { x: 0, y: 0, s: 1920 / 1386 }, L: { W: 1386, H: 780 } };
+    const sc = { w: 1920, h: 1080, dur: 22, win: { x: 0, y: 0, s: 1920 / 1386 }, L: { W: 1386, H: 780 } };
     const base = { drive: 'mac', view: 'map', pills: ['Scanned just now', '1.4M files'] };
     const R = Object.assign({}, base, { path: [] }), U = Object.assign({}, base, { path: ['Users'] }), A = Object.assign({}, base, { path: ['Users', 'alex'] });
     const Ac = Object.assign({}, A, { coll: { count: 3, size: 19.2, items: [], show: 1 } });
@@ -165,16 +220,23 @@
         const lines = C.copy.hook.map((l, i) => { const k = E.arrive(seg(t, 0.25 + i * 0.13, 0.8)); return `<div class="tl"><span style="transform:translateY(${((1 - k) * 105).toFixed(2)}%)">${l}</span></div>`; }).join('');
         out.over += `<div class="title" style="font-size:124px;opacity:${ex.toFixed(3)};transform:translateY(${((1 - ex) * -24).toFixed(2)}px)">${lines}</div>`;
       }
-      if (t >= 15.6) {
-        const ex = 1 - seg(t, 17.6, 0.36), k = i => E.arrive(seg(t, 15.7 + i * 0.11, 0.8));
+      // end card: the window (Copy & Verify, all verified) steps back to the right, the name arrives on the left
+      const END = 19.7, kend = E.io(seg(t, END, 0.9));
+      if (t >= END + 0.25) {
+        const ex = 1 - seg(t, 21.55, 0.36), k = i => E.arrive(seg(t, END + 0.35 + i * 0.11, 0.8));
         const row = (i, html) => `<div style="opacity:${(Math.min(1, k(i) * 1.5) * ex).toFixed(3)};transform:translateY(${((1 - k(i)) * 30).toFixed(2)}px)">${html}</div>`;
-        out.over += `<div class="end">` + row(0, `<img src="${C.brand.icon}" width="200" height="200" alt="">`) + row(1, `<div class="e-n">${C.copy.end.name}</div>`) + row(2, `<div class="e-l">${C.copy.end.line}</div>`) + `</div>`;
+        out.over += `<div class="endc">` + row(0, `<img src="${C.brand.icon}" width="150" height="150" alt="">`) + row(1, `<div class="e-n">${C.copy.end.name}</div>`) + row(2, `<div class="e-l">${C.copy.end.line}</div>`) + `</div>`;
       }
-      if (t >= 2.2 && t < 15.95) {
-        const kin = E.arrive(seg(t, 2.25, 1.0)), kout = E.io(seg(t, 15.25, 0.65));
-        out.win = { x: 0, y: (1 - kin) * sc.h + kout * sc.h, s: sc.win.s };
+      if (t >= 2.2) {
+        const kin = E.arrive(seg(t, 2.25, 1.0)), kout = E.io(seg(t, 21.4, 0.6));
+        out.win = { x: 800 * kend, y: (1 - kin) * sc.h + 236 * kend + kout * sc.h, s: lerp(sc.win.s, 1.15, kend) };
+        out.framed = t >= END;
         const s0 = 3.0, s1 = 5.0;
-        const st = view(t, [{ at: 0, st: scanState({ drive: 'mac' }, t, s0, s1) }, { at: 5.12, st: R, sweep: 1.0 }, { at: 7.32, st: U, kind: 'split', sweep: 0.6 }, { at: 8.37, st: A, kind: 'split', sweep: 0.85 }]);
+        const tf = seg(t, 16.55, 2.35), run = crun(tf);
+        const st = view(t, [{ at: 0, st: scanState({ drive: 'mac' }, t, s0, s1) }, { at: 5.12, st: R, sweep: 1.0 }, { at: 7.32, st: U, kind: 'split', sweep: 0.6 }, { at: 8.37, st: A, kind: 'split', sweep: 0.85 },
+          { at: 15.32, st: CSET }, { at: 16.42, st: run }, { at: 19.0, st: cdone(E.arrive(seg(t, 19.08, 0.5))) }]);
+        if (st.i === 5) st.tools = { copy: tf < 0.74 ? { frac: tf / 0.74, status: `Copying ${Math.round(tf / 0.74 * 100)}%`, tone: 'cy' } : { frac: (tf - 0.74) / 0.26, status: `Verifying ${Math.round((tf - 0.74) / 0.26 * 100)}%`, tone: 'cy' } };
+        if (st.i === 6) st.tools = { copy: { status: '1,204 files verified', tone: 'g' } };
         Object.assign(st, st.i === 1 ? hover(t, [{ i: 0, a: 6.45, b: 7.6 }]) : st.i === 2 ? hover(t, [{ i: 0, a: 7.9, b: 8.6 }]) : st.i === 3 ? hover(t, [{ i: 1, a: 9.5, b: 10.35 }, { i: 6, a: 10.85, b: 11.5, row: 1 }, { i: 8, a: 11.65, b: 12.2, row: 1 }, { i: 9, a: 12.35, b: 13.3, row: 1 }]) : {});
         const start = [1560, 1200];
         const kfs = [
@@ -183,9 +245,11 @@
           { t: 11.0, d: 0.7, p: pt(sc, 'A', A, 'col-6', 0.62, 0.66) },
           { t: 11.8, d: 0.45, p: pt(sc, 'A', A, 'col-8', 0.62, 0.66) },
           { t: 12.5, d: 0.45, p: pt(sc, 'A', A, 'col-9', 0.62, 0.66) },
-          { t: 13.75, d: 0.8, p: pt(sc, 'Ac', Ac, 'btn-trash', 0.84, 0.72) }
+          { t: 13.75, d: 0.8, p: pt(sc, 'Ac', Ac, 'btn-trash', 0.84, 0.72) },
+          { t: 15.15, d: 0.85, p: pt(sc, 'A', A, 'tool-copy', 0.84, 0.62) },
+          { t: 16.25, d: 0.8, p: pt(sc, 'CSET', CSET, 'btn-start', 0.85, 0.62) }
         ];
-        const presses = [{ id: 'slice', at: 7.2 }, { id: 'slice', at: 8.25 }, { id: 'col-6', at: 11.05 }, { id: 'col-8', at: 11.85 }, { id: 'col-9', at: 12.55 }, { id: 'btn-trash', at: 13.9 }];
+        const presses = [{ id: 'slice', at: 7.2 }, { id: 'slice', at: 8.25 }, { id: 'col-6', at: 11.05 }, { id: 'col-8', at: 11.85 }, { id: 'col-9', at: 12.55 }, { id: 'btn-trash', at: 13.9 }, { id: 'tool-copy', at: 15.2 }, { id: 'btn-start', at: 16.3 }];
         if (st.i === 3) {
           st.collected = PICKS.filter((p, i) => t >= presses[2 + i].at + 0.1).map(p => p[1]);
           st.coll = coll(t, PICKS.map((p, i) => ({ at: presses[2 + i].at + 0.1, n: p[1], s: p[2] })), 14.25);
@@ -193,7 +257,7 @@
         }
         st.pressed = press(t, presses);
         out.st = st;
-        if (t >= 5.5 && t < 15.1) { const c = cursor(t, start, kfs); out.cursor = { x: c[0], y: c[1], k: pressK(t, presses), a: 1 - seg(t, 14.7, 0.3) }; }
+        if (t >= 5.5 && t < 17.4) { const c = cursor(t, start, kfs); out.cursor = { x: c[0], y: c[1], k: pressK(t, presses), a: 1 - seg(t, 16.9, 0.3) }; }
       }
       return out;
     };
@@ -215,7 +279,7 @@
   window.Scenes = {
     init(campaign, elements) {
       C = campaign; els = elements;
-      D = { vols: C.data.vols, groups: C.data.groups, icon: '../../assets/img/icon-128.png',
+      D = { vols: C.data.vols, groups: C.data.groups, copy: C.data.copy, dups: C.data.dups, icon: '../../assets/img/icon-128.png',
         node(drive, path) { const n = C.data.nodes[drive + ':' + path.join('/')]; const items = n.items.map(x => Object.assign({}, x)); return { name: n.name, items, total: items.reduce((a, b) => a + b.s, 0) }; } };
       return D;
     },
