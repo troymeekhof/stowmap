@@ -19,7 +19,7 @@ permissions:
 
 jobs:
   release:
-    runs-on: macos-latest
+    runs-on: macos-15
     env:
       VERSION: ${{ inputs.version }}
       NOTES: ${{ inputs.notes }}
