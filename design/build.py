@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """Builds design/interface.html: the interface design for Stowmap (source of truth for the SwiftUI views).
-States: ?s=map | tree | types | largest | scanning | idle.  Icons: Phosphor (fill), inlined."""
+States: ?s=map | tree | types | largest | scanning | idle | search | duplicates | copy-setup | copy-running | copy-pace | copy-done | check-copy.  Icons: Phosphor (fill), inlined."""
 import math, os, sys, html
 
 HERE = os.path.dirname(os.path.abspath(__file__))
@@ -61,25 +61,63 @@ TOTAL = sum(v for _, v, _, _ in FOLDER)
 KICON = {"folder": "folder", "video": "film-strip", "small": "files", "image": "image", "zip": "package",
          "code": "code", "audio": "music-notes", "doc": "file-text", "hidden": "eye-slash", "app": "app-window"}
 
-def sidebar(scanning=None, sel="Macintosh HD"):
-    vols = [("Internal", [("Macintosh HD", "hard-drive", 0.787, "212.3 GB free of 994.7 GB", True)]),
-            ("External", [("Footage SSD", "usb", 0.61, "776.4 GB free of 2 TB", True),
-                          ("Archive 8TB", "hard-drives", 0.93, "548.1 GB free of 8 TB", False)]),
-            ("Network", [("Studio NAS", "network", 0.48, "18.6 TB free of 36 TB", True)]),
-            ("Folders", [("Client Deliveries", "folder", None, "~/Documents/Client Deliveries", True)])]
+DRV = {  # name: (icon, badge colour)
+    "Macintosh HD": ("hard-drive", "#40D9FF"), "Footage SSD": ("usb", "#B380FF"), "Archive 8TB": ("hard-drives", "#FFC74D"),
+    "Studio NAS": ("network", "#59EBA6"), "Client Deliveries": ("folder", "#FF8CB3")}
+
+def badge(name):
+    ic, col = DRV[name]
+    return f'<span class="badge"><i style="color:{col}">{icon(ic)}</i>{name}</span>'
+
+def sidebar(sel="Macintosh HD", scans=None, query=None, tools=None, footer=None):
+    """sel: selected row name (a drive, "Duplicates", "Copy & Verify" or "Search").
+    scans: {drive: (frac or None for a network share, status)}; a drive mapped to "wait" is queued.
+    tools: {"Duplicates"|"Copy & Verify": (frac or None, status, tone)}; footer: text of the running Scan All state."""
+    scans = scans or {}; tools = tools or {}
+    vols = [("Internal", [("Macintosh HD", 0.787, "212.3 GB free of 994.7 GB", True)]),
+            ("External", [("Footage SSD", 0.61, "776.4 GB free of 2 TB", True),
+                          ("Archive 8TB", 0.93, "548.1 GB free of 8 TB", False)]),
+            ("Network", [("Studio NAS", 0.48, "18.6 TB free of 36 TB", True)]),
+            ("Folders", [("Client Deliveries", None, "~/Documents/Client Deliveries", True)])]
     h = ['<aside class="side"><div class="lights"><b></b><b></b><b></b></div>',
-         f'<div class="brand"><img src="../Resources/icon_preview.png" alt=""><span>Stowmap</span></div><div class="vols">']
+         '<div class="brand"><img src="../Resources/icon_preview.png" alt=""><span>Stowmap</span></div>']
+    if query:
+        h.append(f'<div class="sbox on">{icon("magnifying-glass")}<span class="q">{query}</span>{icon("x-circle","clr")}</div>')
+    else:
+        h.append(f'<div class="sbox">{icon("magnifying-glass")}<span class="q">Search all drives</span><kbd>⌘F</kbd></div>')
+    h.append('<div class="tools">')
+    for name, ic, idle in [("Duplicates", "copy", "Find matching folders"), ("Copy & Verify", "shield-check", "Copy with checksums")]:
+        on = " on" if name == sel else ""
+        frac, status, tone = tools.get(name, (None, idle, ""))
+        meter = f'<div class="meter work"><i style="width:{frac*100:.0f}%"></i></div>' if frac is not None else ""
+        h.append(f'<div class="vol{on}"><div class="vic">{icon(ic)}</div><div class="vtx"><div class="vn"><span>{name}</span></div>{meter}<div class="vs {tone}">{status}</div></div></div>')
+    h.append('</div><div class="vols">')
     for title, rows in vols:
         h.append(f'<div class="grp">{title}</div>')
-        for name, ic, frac, sub, scanned in rows:
+        for name, frac, sub, scanned in rows:
             on = " on" if name == sel else ""
-            if name == scanning: state = '<span class="spin"></span>'
-            elif scanned: state = icon("check-circle", "ok")
-            else: state = ""
-            col = "#FF6666" if (frac or 0) > 0.92 else ("#FFBF40" if (frac or 0) > 0.82 else "#40D9FF")
-            meter = f'<div class="meter"><i style="width:{frac*100:.0f}%;background:{col}"></i></div>' if frac else ""
-            h.append(f'<div class="vol{on}"><div class="vic">{icon(ic)}</div><div class="vtx"><div class="vn"><span>{name}</span>{state}</div>{meter}<div class="vs">{sub}</div></div></div>')
-    h.append('</div><div class="sfoot"><button class="quiet">' + icon("folder-plus") + 'Scan a Folder…</button>' + icon("gear-six", "gear") + '</div></aside>')
+            ic = DRV[name][0]
+            sc = scans.get(name)
+            if sc == "wait":
+                state = ""; sub_h = '<div class="vs">Waiting to scan</div>'
+                meter = f'<div class="meter"><i style="width:{frac*100:.0f}%;background:rgba(255,255,255,.3)"></i></div>' if frac else ""
+            elif sc:
+                p, status = sc
+                state = '<span class="spin"></span>'
+                meter = (f'<div class="meter scan"><i style="width:{p*100:.0f}%"></i></div>' if p is not None
+                         else '<div class="meter scan"><i class="slide" style="width:34%;margin-left:41%"></i></div>')
+                sub_h = f'<div class="vs cy">{status}</div>'
+            else:
+                state = icon("check-circle", "ok") if scanned else ""
+                col = "#FF6666" if (frac or 0) > 0.92 else ("#FFBF40" if (frac or 0) > 0.82 else "#40D9FF")
+                meter = f'<div class="meter"><i style="width:{frac*100:.0f}%;background:{col}"></i></div>' if frac else ""
+                sub_h = f'<div class="vs">{sub}</div>'
+            h.append(f'<div class="vol{on}"><div class="vic">{icon(ic)}</div><div class="vtx"><div class="vn"><span>{name}</span>{state}</div>{meter}{sub_h}</div></div>')
+    if footer:
+        allb = f'<div class="scanall run"><span class="sat">{footer}</span><button class="quiet red sm">{icon("stop")}Stop</button></div>'
+    else:
+        allb = f'<button class="quiet scanall">{icon("hard-drives")}Scan All Drives</button>'
+    h.append(f'</div><div class="sfoot">{allb}<div class="sfr"><button class="quiet">' + icon("folder-plus") + 'Scan a Folder…</button>' + icon("gear-six", "gear") + '</div></div></aside>')
     return "".join(h)
 
 def header(name="Macintosh HD", sub="Startup disk  ·  APFS  ·  782.4 GB used of 994.7 GB  ·  212.3 GB free", frac=0.787, scanned=True, col="#40D9FF"):
@@ -242,11 +280,278 @@ def idle_state():
              + f'<div class="ctitle gap">What you get</div>{g}</div>')
     return header("Archive 8TB", "External  ·  Mac OS Extended  ·  7.45 TB used of 8 TB  ·  548.1 GB free", .93, False, "#FF6666") + f'<div class="split">{left}{right}</div>'
 
-STATES = {"map": (map_state, None, "Macintosh HD"), "tree": (tree_state, None, "Macintosh HD"), "types": (types_state, None, "Macintosh HD"),
-          "largest": (largest_state, None, "Macintosh HD"), "scanning": (scanning_state, "Footage SSD", "Footage SSD"), "idle": (idle_state, None, "Archive 8TB")}
+# ---------- 1.3: Search, Duplicates, Copy & Verify ----------
+def seg(items, active, cls=""):
+    return f'<div class="seg {cls}">' + "".join(f'<span class="{"on" if i == active else ""}">{n}</span>' for i, n in enumerate(items)) + '</div>'
+
+def tool_head(title, sub, right=""):
+    return f'<div class="head"><div class="ht"><div class="h1">{title}</div><div class="hs">{sub}</div></div><div class="hr">{right}</div></div>'
+
+def loc(drive, path):
+    return f'<span class="loc">{badge(drive)}<small>{html.escape(path)}</small></span>'
+
+def tile(drive):
+    ic, col = DRV[drive]
+    return f'<div class="vic" style="color:{col}">{icon(ic)}</div>'
+
+def search_state():
+    q = "Lakeshore"
+    R = [("11 Lakeshore Wedding", "folder", "Footage SSD", "/2026", 212.4), ("11 Lakeshore Wedding", "folder", "Studio NAS", "/Projects/2026", 212.4),
+         ("Lakeshore_Highlights_Master.mov", "video", "Macintosh HD", "/Users/alex/Movies/Exports", 24.6),
+         ("Lakeshore Wedding Proxies", "folder", "Macintosh HD", "/Users/alex/Movies/Proxy Media", 18.2),
+         ("Lakeshore_Ceremony_Multicam.mov", "video", "Footage SSD", "/2026/11 Lakeshore Wedding/Renders", 14.1),
+         ("Lakeshore_Drone_Selects.mov", "video", "Footage SSD", "/2026/11 Lakeshore Wedding/Drone", 9.3),
+         ("Lakeshore Wedding.fcpbundle", "zip", "Macintosh HD", "/Users/alex/Movies/Final Cut Projects", 6.8),
+         ("Lakeshore Gallery Export", "folder", "Client Deliveries", "/2026", 4.2),
+         ("Lakeshore_Teaser_60s.mp4", "video", "Client Deliveries", "/2026/Lakeshore Gallery Export", 1.1),
+         ("Lakeshore_Audio_Stems.zip", "zip", "Studio NAS", "/Projects/2026/11 Lakeshore Wedding/Audio", 0.842),
+         ("Lakeshore Catalog.lrcat", "code", "Macintosh HD", "/Users/alex/Pictures/Lightroom", 0.612),
+         ("Lakeshore_Vows_Mix.wav", "audio", "Footage SSD", "/2026/11 Lakeshore Wedding/Audio", 0.318),
+         ("Lakeshore Stills Selects", "folder", "Studio NAS", "/Projects/2026/11 Lakeshore Wedding", 0.204),
+         ("Lakeshore Shot List.pdf", "doc", "Macintosh HD", "/Users/alex/Documents/Weddings", 0.0024),
+         ("Lakeshore Timeline.pdf", "doc", "Macintosh HD", "/Users/alex/Documents/Weddings", 0.0011)]
+    TINT = {"folder": "#4DBFFF", "video": "#8C5CFF", "zip": "#FF7366", "code": "#59EBA6", "audio": "#FF8CB3", "doc": "#FFC74D"}
+    rows = "".join(
+        f'<div class="srow{" hot" if i == 2 else ""}"><span class="sic" style="color:{TINT[k]}">{icon(KICON[k])}</span>'
+        f'<span class="fn"><b>{n.replace(q, "<mark>" + q + "</mark>")}</b>{loc(d, p)}</span>'
+        f'<div class="meter"><i style="width:{max(2, v / R[0][4] * 100):.0f}%;background:{DRV[d][1]}"></i></div><span class="rs">{gb(v)}</span>'
+        f'<span class="ib">{icon("tray-arrow-down")}</span><span class="ib">{icon("chart-donut")}</span><span class="ib">{icon("magnifying-glass")}</span></div>'
+        for i, (n, k, d, p, v) in enumerate(R))
+    based = ('<div class="based"><b>Based on:</b> scans of Macintosh HD (2m ago), Footage SSD (1h ago), Studio NAS (yesterday) '
+             'and Client Deliveries (3d ago). Archive 8TB is not scanned.</div>')
+    return (tool_head("Search", "38 results for “lakeshore”  ·  4 drives", seg(["All", "Folders", "Files"], 0)) + based +
+            f'<div class="card list tree">{rows}</div>')
+
+def dup_state():
+    right = (f'<button class="quiet">{icon("hard-drives")}All drives{icon("caret-down","cd")}</button>'
+             f'<button class="quiet">{icon("sliders-horizontal")}Filters{icon("caret-down","cd")}</button>'
+             f'<button class="glow sm">{icon("copy")}Find Duplicates</button>')
+    SETS = [  # title, [(drive, path, collected)], GB per copy, files, verify state, expanded file sets
+        ("11 Lakeshore Wedding", [("Footage SSD", "/2026/11 Lakeshore Wedding", True), ("Studio NAS", "/Projects/2026/11 Lakeshore Wedding", False)], 212.4, "682", ("done",), None),
+        ("10 Brand Film", [("Footage SSD", "/2026/10 Brand Film", False), ("Studio NAS", "/Projects/2026/10 Brand Film", False)], 99.6, "522", ("run", .64), None),
+        ("Card 03", [("Macintosh HD", "/Users/alex/Movies/Imports/A-Cam Card 03", False), ("Footage SSD", "/2026/11 Lakeshore Wedding/A-Cam/Card 03", False)], 38.9, "6", ("idle",),
+         [("A003_C001_1107KT.braw", 6.48), ("A003_C002_1107KT.braw", 6.48), ("A003_C003_1107KT.braw", 7.12), ("A003_C004_1107KT.braw", 6.31)]),
+        ("Drone Raw", [("Macintosh HD", "/Users/alex/Movies/Drone Raw", False), ("Studio NAS", "/Projects/2026/11 Lakeshore Wedding/Drone", False)], 15.4, "84", ("idle",), None),
+        ("Stems", [("Footage SSD", "/2026/10 Brand Film/Audio/Stems", False), ("Client Deliveries", "/2026/Brand Film/Audio", False)], 4.6, "37", ("idle",), None),
+    ]
+    out = []
+    for title, locs, per, files, ver, exp in SETS:
+        ls = "".join(f'<div class="dloc">{badge(d)}<small>{p}</small><span class="ib sm{" amber" if c else ""}">{icon("tray" if c else "tray-arrow-down")}</span></div>' for d, p, c in locs)
+        if ver[0] == "done": v = f'<span class="pill g">{icon("seal-check")}Verified identical</span>'
+        elif ver[0] == "run": v = f'<div class="vprog"><div class="meter work"><i style="width:{ver[1]*100:.0f}%"></i></div><span class="num">{ver[1]*100:.0f}%</span><button class="quiet sm">Stop</button></div>'
+        else: v = f'<button class="quiet">{icon("shield-check")}Verify</button>'
+        free = per * (len(locs) - 1)
+        fl = ""
+        if exp:
+            fl = '<div class="dfiles">' + "".join(
+                f'<div class="dfile"><span class="ric" style="color:#8C5CFF">{icon("film-strip")}</span><span class="dn">{n}</span>'
+                f'<span class="dc">2 copies  ·  {v2:.2f} GB each</span><span class="pill a">Samples match</span><span class="rs">{gb(v2)}</span></div>' for n, v2 in exp) + '</div>'
+        out.append(f'<div class="dset{" open" if exp else ""}"><div class="drow"><span class="car{" open" if exp else ""}">{icon("caret-right")}</span>'
+                   f'<span class="sic" style="color:#4DBFFF">{icon("folder")}</span><div class="dbody"><b class="dt">{title}</b>{ls}</div>'
+                   f'<div class="dstat"><b>{gb(free)} to free</b><small>{files} files  ·  {gb(per)} per copy</small></div>'
+                   f'<div class="dver">{v}</div><span class="ib">{icon("prohibit")}</span></div>{fl}</div>')
+    chips = f'<span class="chip">11 Lakeshore Wedding<em>on Footage SSD  ·  212.4 GB</em>{icon("x","x")}</span>'
+    coll = (f'<div class="card coll">{icon("tray","tray")}<div class="ct"><small>Collector</small><b>1 item  ·  212.4 GB</b></div>'
+            f'<div class="chips">{chips}</div><button class="quiet">Clear</button><button class="quiet red">{icon("trash")}Move to Trash</button></div>')
+    return (tool_head("Duplicates", "14 matching folders  ·  412.6 GB to free  ·  one copy of everything always stays", right) +
+            f'<div class="card list tree dups">{"".join(out)}</div>' + coll)
+
+MODE = lambda i: seg([icon("copy") + "Copy", icon("list-checks") + "Check a Copy"], i, "mode")
+
+def copy_setup_state():
+    SRC = [("A-Cam", "/2026/11 Lakeshore Wedding", 148.6, "412 files"), ("B-Cam", "/2026/11 Lakeshore Wedding", 41.2, "186 files"),
+           ("Drone", "/2026/11 Lakeshore Wedding", 22.6, "84 files"), ("Footage", "/2026/10 Brand Film", 71.3, "212 files"),
+           ("Audio", "/2026/10 Brand Film", 6.4, "96 files"), ("Project Files", "/2026/10 Brand Film", 21.9, "214 files")]
+    src = "".join(f'<div class="crow"><span class="sic" style="color:#4DBFFF">{icon("folder")}</span><span class="fn"><b>{n}</b>{loc("Footage SSD", p)}</span>'
+                  f'<span class="csz"><b>{gb(v)}</b><small>{c}</small></span><span class="ib ghostx">{icon("x")}</span></div>' for n, p, v, c in SRC)
+    left = (f'<div class="card pane"><div class="phead"><b>From</b><span>6 items  ·  312 GB</span><span class="grow"></span><button class="quiet sm">{icon("plus")}Add…</button></div>'
+            f'{src}<div class="drop">{icon("tray-arrow-down")}<span>Drop files or folders here</span></div></div>')
+    DST = [("Archive 8TB", "/2026", .931, .039, "548.1 GB free", "236.1 GB after this copy"), ("Studio NAS", "/Projects/2026", .483, .009, "18.6 TB free", "18.3 TB after this copy")]
+    dst = "".join(f'<div class="dest">{tile(d)}<div class="dtx"><div class="dl1"><b>{d}</b><small>{p}</small></div>'
+                  f'<div class="meter two"><i style="width:{u*100:.1f}%"></i><i class="add" style="width:{max(c*100,1.2):.1f}%"></i></div>'
+                  f'<div class="dl2"><span>{f}</span><span>{af}</span></div></div><span class="ib ghostx">{icon("x")}</span></div>' for d, p, u, c, f, af in DST)
+    dst = f'<div class="dests">{dst}</div>'
+    right = (f'<div class="card pane"><div class="phead"><b>To</b><span>2 of 3 destinations</span></div>{dst}'
+             f'<div class="drop">{icon("plus-circle")}<span>Add Destination…</span><small>Up to three. Drop a drive or folder here.</small></div></div>')
+    def menu(l, v): return f'<div class="opt"><small>{l}</small><button class="quiet">{v}{icon("caret-up-down","cd")}</button></div>'
+    def sw(l, on): return f'<div class="opt"><small>{l}</small><span class="sw{" on" if on else ""}"><i></i></span></div>'
+    opts = ('<div class="card opts">' + menu("Checksum", "xxHash64") + menu("Verify", "Destination") + menu("If a file exists", "Skip") +
+            sw("Include hidden files", False) + sw("Write checksum list (MHL)", True) + '</div>')
+    foot = (f'<div class="go"><div class="sum"><b>1,204 files  ·  312 GB to 2 destinations</b><span>Needs 624 GB. Both destinations have room.</span></div>'
+            f'<button class="glow xl">{icon("shield-check")}Start Copy</button></div>')
+    return (tool_head("Copy &amp; Verify", "Copy to as many as three places and check every file.", MODE(0)) +
+            f'<div class="split">{left}{right}</div>' + opts + foot)
+
+def smooth(pts):
+    """Catmull-Rom through pts, as cubic beziers."""
+    d = [f'M{pts[0][0]:.1f} {pts[0][1]:.1f}']
+    for i in range(len(pts) - 1):
+        p0 = pts[max(i - 1, 0)]; p1 = pts[i]; p2 = pts[i + 1]; p3 = pts[min(i + 2, len(pts) - 1)]
+        c1 = (p1[0] + (p2[0] - p0[0]) / 6, p1[1] + (p2[1] - p0[1]) / 6); c2 = (p2[0] - (p3[0] - p1[0]) / 6, p2[1] - (p3[1] - p1[1]) / 6)
+        d.append(f'C{c1[0]:.1f} {c1[1]:.1f} {c2[0]:.1f} {c2[1]:.1f} {p2[0]:.1f} {p2[1]:.1f}')
+    return "".join(d)
+
+def speed_series(n=44, end=412, slow=False):
+    """Sample copy speeds in MB/s: quick ramp, steady run with small-file dips, ending at `end`."""
+    v = []
+    for i in range(n):
+        t = i / (n - 1)
+        base = 405 * (1 - math.exp(-t * 26)) + 16 * math.sin(i * 0.9) + 9 * math.sin(i * 2.3 + 1)
+        base -= 150 * math.exp(-((t - .36) / .035) ** 2) + 95 * math.exp(-((t - .71) / .03) ** 2)
+        if slow: base = base * (1 - .91 / (1 + math.exp(-(t - .8) * 40)))
+        v.append(max(base, 0))
+    v[-1] = end; v[-2] = (v[-3] + end) / 2
+    return v
+
+def spark(vals, w=574, h=124, vmax=470):
+    pad = 7
+    _rid[0] += 1; u = _rid[0]
+    pts = [(pad + i / (len(vals) - 1) * (w - 2 * pad), h - 6 - v / vmax * (h - 16)) for i, v in enumerate(vals)]
+    line = smooth(pts)
+    ex, ey = pts[-1]
+    grid = "".join(f'<line x1="0" x2="{w}" y1="{y:.1f}" y2="{y:.1f}" stroke="rgba(255,255,255,.06)"/>' for y in (h - 6 - 200 / vmax * (h - 16), h - 6 - 400 / vmax * (h - 16)))
+    return (f'<svg class="spark" width="{w}" height="{h}" viewBox="0 0 {w} {h}"><defs>'
+            f'<linearGradient id="spl{u}" x1="0" x2="1" y1="0" y2="0"><stop stop-color="#8C5CFF"/><stop offset="1" stop-color="#40D9FF"/></linearGradient>'
+            f'<linearGradient id="spf{u}" x1="0" x2="0" y1="0" y2="1"><stop stop-color="#40D9FF" stop-opacity=".30"/><stop offset="1" stop-color="#8C5CFF" stop-opacity="0"/></linearGradient></defs>'
+            f'{grid}<line x1="0" x2="{w}" y1="{h-.5}" y2="{h-.5}" stroke="rgba(255,255,255,.10)"/>'
+            f'<path d="{line}L{ex:.1f} {h}L{pts[0][0]:.1f} {h}Z" fill="url(#spf{u})"/>'
+            f'<path d="{line}" fill="none" stroke="url(#spl{u})" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"/>'
+            f'<circle cx="{ex:.1f}" cy="{ey:.1f}" r="8" fill="rgba(64,217,255,.22)"/><circle cx="{ex:.1f}" cy="{ey:.1f}" r="4" fill="#40D9FF" stroke="#12121a" stroke-width="1.5"/></svg>')
+
+def bigring(copied, verified, center, done=False):
+    """260 px box. Outer track r116 w16 = copied (violet to cyan). Inner track r97 w8 = verified (green). Both start at 12 o'clock."""
+    S, c, ro, ri = 260, 130, 116, 97
+    Lo, Li = 2 * math.pi * ro, 2 * math.pi * ri
+    _rid[0] += 1; u = _rid[0]
+    oc = "#59E699" if done else f"url(#brg{u})"
+    arc = lambda r, w, L, f, col, extra="": (f'<circle cx="{c}" cy="{c}" r="{r}" fill="none" stroke="{col}" stroke-width="{w}" stroke-linecap="round" '
+                                              f'stroke-dasharray="{L*f:.1f} {L:.1f}" transform="rotate(-90 {c} {c})"{extra}/>') if f > .004 else ""
+    return (f'<div class="bigring"><svg width="{S}" height="{S}" viewBox="0 0 {S} {S}"><defs><linearGradient id="brg{u}" x1="0" y1="0" x2="1" y2="1"><stop stop-color="#8C5CFF"/><stop offset="1" stop-color="#40D9FF"/></linearGradient></defs>'
+            f'<circle cx="{c}" cy="{c}" r="{ro}" fill="none" stroke="rgba(255,255,255,.07)" stroke-width="16"/>'
+            f'<circle cx="{c}" cy="{c}" r="{ri}" fill="none" stroke="rgba(255,255,255,.07)" stroke-width="8"/>'
+            f'{arc(ro, 16, Lo, copied, oc)}{arc(ri, 8, Li, verified, "#59E699")}</svg><div class="center">{center}</div></div>')
+
+def stat(label, value, sub):
+    return f'<div class="st"><small>{label}</small><b>{value}</b><span>{sub}</span></div>'
+
+def lane(drive, path, copy, ver, l1, l2, tone=""):
+    return (f'<div class="lane">{tile(drive)}<div class="ln2"><b>{drive}</b><small>{path}</small></div>'
+            f'<div class="lbars"><div class="meter copy"><i style="width:{copy*100:.0f}%"></i></div><div class="meter ver"><i style="width:{ver*100:.0f}%"></i></div></div>'
+            f'<div class="lst"><b class="{tone}">{l1}</b><small>{l2}</small></div></div>')
+
+FILES = [  # name, folder, GB, checksum, state
+    ("A003_C013_1107KT.braw", "11 Lakeshore Wedding/A-Cam/Card 03", 9.84, "9f3a61c2", "ok"),
+    ("A003_C012_1107KT.braw", "11 Lakeshore Wedding/A-Cam/Card 03", 12.1, "04be7d19", "ok"),
+    ("A003_C011_1107KT.braw", "11 Lakeshore Wedding/A-Cam/Card 03", 6.48, "c81e55a0", "ok"),
+    ("A003_C010_1107KT.braw", "11 Lakeshore Wedding/A-Cam/Card 03", 7.12, "", "skip"),
+    ("A003_C009_1107KT.braw", "11 Lakeshore Wedding/A-Cam/Card 03", 3.31, "71d09f4e", "ok"),
+    ("A003_C008_1107KT.braw", "11 Lakeshore Wedding/A-Cam/Card 03", 8.02, "e2a47b36", "ok"),
+    ("A003_C007_1107KT.braw", "11 Lakeshore Wedding/A-Cam/Card 03", 5.57, "5b90c2fd", "ok"),
+    ("A003_C006_1107KT.braw", "11 Lakeshore Wedding/A-Cam/Card 03", 10.4, "38f6a1e7", "ok"),
+    ("A003_C005_1107KT.braw", "11 Lakeshore Wedding/A-Cam/Card 03", 4.26, "d4c7b08a", "ok"),
+]
+
+def file_rows(rows, wide=True):
+    out = []
+    for n, p, v, hsh, state in rows:
+        mid = f'<small class="fp">{p}</small>' if wide else ""
+        if state == "ok": tail = f'<span class="hash">{hsh}</span>{icon("check-circle","okc")}'
+        else: tail = f'<span class="hash amber">Skipped</span>{icon("warning","warnc")}'
+        out.append(f'<div class="cfile{"" if wide else " narrow"}"><span class="ric" style="color:#8C5CFF">{icon("film-strip")}</span><span class="cn">{n}</span>{mid}<span class="rs">{gb(v)}</span>{tail}</div>')
+    return "".join(out)
+
+def copy_running_state(pace=False):
+    center = '<div class="pv">41<em>%</em></div><div class="ph">Copying</div>'
+    if pace:
+        speed, vals = "38", speed_series(end=38, slow=True)
+        stats = stat("Copied", "128.4 GB", "of 312 GB") + stat("Files", "480", "of 1,204") + stat("Time left", "1 h 22 min", "at this speed") + stat("Elapsed", "5:31", "started 2:16 PM")
+        lanes = (lane("Archive 8TB", "/2026", .41, .38, "Writing 38 MB/s", "Verified 452 of 480") +
+                 lane("Studio NAS", "/Projects/2026", .41, .19, "Writing 38 MB/s", "Verified 212 of 480", "amber"))
+        note = f'<div class="pace">{icon("warning")}<span>Studio NAS is writing at 38 MB/s. Shares on this connection usually manage about 110. Check the cable or port.</span></div>'
+    else:
+        speed, vals = "412", speed_series()
+        stats = stat("Copied", "128.4 GB", "of 312 GB") + stat("Files", "480", "of 1,204") + stat("Time left", "12 min", "with verifying") + stat("Elapsed", "5:31", "started 2:16 PM")
+        lanes = (lane("Archive 8TB", "/2026", .41, .38, "Writing 412 MB/s", "Verified 452 of 480") +
+                 lane("Studio NAS", "/Projects/2026", .41, .19, "Writing 398 MB/s", "Verified 212 of 480"))
+        note = ""
+    hero = (f'<div class="card run">{bigring(.41, .29, center)}<div class="rside">'
+            f'<div class="spd"><b>{speed}</b><span>MB/s</span><span class="grow"></span><div class="key"><span><i class="kc"></i>Copied 41%</span><span><i class="kv"></i>Verified 29%</span></div></div>'
+            f'{spark(vals)}<div class="stats4">{stats}</div></div></div>')
+    now = (f'<div class="cfile now"><span class="ric" style="color:#8C5CFF">{icon("film-strip")}</span><span class="cn">A003_C014_1107KT.braw</span>'
+           f'<div class="meter work"><i style="width:62%"></i></div><span class="rs">11.8 GB</span><span class="hash num">62%</span><span class="spin"></span></div>')
+    files = (f'<div class="card list files"><div class="ctitle"><span>Files</span><em>480 of 1,204</em></div>{now}{file_rows(FILES)}</div>')
+    ctl = f'<button class="quiet">{icon("pause")}Pause</button><button class="quiet red">{icon("stop")}Stop</button>'
+    return (tool_head("Copy &amp; Verify", "6 items from Footage SSD to Archive 8TB and Studio NAS  ·  xxHash64  ·  verifying each destination", ctl) +
+            hero + note + f'<div class="card lanes">{lanes}</div>' + files)
+
+def copy_done_state():
+    center = icon("check-fat", "bigcheck")
+    btns = (f'<div class="btns"><button class="quiet">{icon("folder")}Show in Finder</button><button class="quiet">{icon("file-text")}Open Checksum List</button>'
+            f'<button class="glow sm">{icon("plus")}New Copy</button></div>')
+    hero = (f'<div class="card run done">{bigring(1, 1, center, True)}<div class="rside">'
+            '<div class="dt1">All 1,204 files verified</div>'
+            '<div class="dp">Every file was read back from Archive 8TB and Studio NAS, and its checksum matches the source.</div>'
+            f'<div class="stats4 three">{stat("Copied", "312 GB", "to each destination")}{stat("Time", "14 min 20 s", "copy and verify")}{stat("Average", "362 MB/s", "over the whole copy")}</div>'
+            f'{btns}</div></div>')
+    def dres(d, p, sub): return (f'<div class="lane res">{tile(d)}<div class="ln2"><b>{d}</b><small>{p}  ·  {sub}</small></div>'
+                                 f'<span class="pill g">{icon("seal-check")}Verified</span></div>')
+    def cl(n, sub): return (f'<div class="lane res"><div class="vic" style="color:rgba(255,255,255,.7)">{icon("file-text")}</div><div class="ln2"><b>{n}</b><small>{sub}</small></div>'
+                            f'<span class="ib">{icon("magnifying-glass")}</span></div>')
+    left = ('<div class="card pane res"><div class="ctitle">Destinations</div>' + dres("Archive 8TB", "/2026", "1,204 files, 312 GB") + dres("Studio NAS", "/Projects/2026", "1,204 files, 312 GB") +
+            '<div class="ctitle gap">Checksum lists, saved in each destination</div>' + cl("Footage SSD 2026-11-17 1416.mhl", "MHL  ·  xxHash64  ·  1,204 entries") +
+            cl("Footage SSD 2026-11-17 1416.txt", "Plain text  ·  one line per file") + '</div>')
+    done_files = [("A007_C031_1107KT.braw", "", 5.12, "1c6e9b40", "ok")] + [f for f in FILES if f[4] == "ok"] + [("A003_C004_1107KT.braw", "", 6.31, "ab02f7c3", "ok"), ("A003_C003_1107KT.braw", "", 7.12, "60d1e8b5", "ok")]
+    right = f'<div class="card list files"><div class="ctitle"><span>Files</span><em>1,204 verified</em></div>{file_rows(done_files, False)}</div>'
+    return tool_head("Copy &amp; Verify", "Finished at 2:30 PM  ·  6 items from Footage SSD to 2 destinations", MODE(0)) + hero + f'<div class="split">{left}{right}</div>'
+
+def check_copy_state():
+    def well(label, d, p): return f'<div class="well"><small>{label}</small><div class="wl">{tile(d)}<div class="ln2"><b>{p.rsplit("/", 1)[1]}</b>{loc(d, p.rsplit("/", 1)[0])}</div></div></div>'
+    setup = ('<div class="card chk">' + well("Original", "Footage SSD", "/2026/11 Lakeshore Wedding") + f'<span class="arr">{icon("arrow-right")}</span>' +
+             well("Copy", "Studio NAS", "/Projects/2026/11 Lakeshore Wedding") +
+             f'<div class="well mode"><small>Full compares checksums</small>{seg(["Quick", "Full"], 1)}</div>'
+             f'<button class="quiet">{icon("arrow-clockwise")}Check Again</button></div>')
+    C = [("676", "Match", "check-circle", "#59E699"), ("4", "Missing from the copy", "minus-circle", "#FF6666"),
+         ("2", "Different", "not-equals", "#FFC74D"), ("3", "Only in the copy", "plus-circle", "#40D9FF")]
+    counters = '<div class="counters">' + "".join(f'<div class="card cnt"><span class="ci" style="color:{c}">{icon(ic)}</span><b>{n}</b><span>{l}</span></div>' for n, l, ic, c in C) + '</div>'
+    def row(ic, col, n, p, detail, v, k="film-strip", tint="#8C5CFF"):
+        return (f'<div class="krow"><span class="ks" style="color:{col}">{icon(ic)}</span><span class="ric" style="color:{tint}">{icon(k)}</span><span class="cn">{n}</span>'
+                f'<small class="fp">{p}</small><span class="kd" style="color:{col}">{detail}</span><span class="rs">{v}</span><span class="ib">{icon("magnifying-glass")}</span></div>')
+    R, A, B = "#FF6666", "#FFC74D", "#40D9FF"
+    rows = ('<div class="ctitle"><span>Missing from the copy</span><em>4 files  ·  26.3 GB</em></div>' +
+            row("minus-circle", R, "B001_C022_1107KT.braw", "B-Cam/Card 01", "Not on Studio NAS", "8.94 GB") +
+            row("minus-circle", R, "B001_C023_1107KT.braw", "B-Cam/Card 01", "Not on Studio NAS", "7.61 GB") +
+            row("minus-circle", R, "B001_C024_1107KT.braw", "B-Cam/Card 01", "Not on Studio NAS", "9.42 GB") +
+            row("minus-circle", R, "Vows_Lav_02.wav", "Audio", "Not on Studio NAS", "318 MB", "music-notes", "#FF8CB3") +
+            '<div class="ctitle gap"><span>Different</span><em>2 files</em></div>' +
+            row("not-equals", A, "A003_C009_1107KT.braw", "A-Cam/Card 03", "Incomplete: 2.11 of 3.31 GB", "3.31 GB") +
+            row("not-equals", A, "DJI_0412.MP4", "Drone", "Same size, checksum differs", "1.87 GB") +
+            '<div class="ctitle gap"><span>Only in the copy</span><em>3 files</em></div>' +
+            row("plus-circle", B, "Lakeshore_Selects_v2.fcpxml", "Edit", "Not in the original", "412 KB", "code", "#59EBA6") +
+            row("plus-circle", B, "Lakeshore_Selects_v1.fcpxml", "Edit", "Not in the original", "398 KB", "code", "#59EBA6") +
+            row("plus-circle", B, "Notes for colour.pdf", "Edit", "Not in the original", "1.2 MB", "file-text", "#FFC74D"))
+    foot = (f'<div class="card coll">{icon("warning","tray")}<div class="ct"><small>Not complete yet</small><b>4 files are missing and 2 are different on Studio NAS</b></div>'
+            f'<span class="grow"></span><button class="glow sm">{icon("copy")}Copy the missing files</button></div>')
+    return (tool_head("Copy &amp; Verify", "Checked 682 files in 3 min 12 s  ·  full check with xxHash64", MODE(1)) + setup + counters +
+            f'<div class="card list tree chkl">{rows}</div>' + foot)
+
+SCAN_ALL = dict(scans={"Footage SSD": (.58, "Scanning 58%  ·  862K files"), "Archive 8TB": (.12, "Scanning 12%  ·  96K files"),
+                       "Studio NAS": (None, "Scanning  ·  213 GB mapped"), "Macintosh HD": "wait", "Client Deliveries": "wait"},
+                footer="Scanning 3 drives, 2 waiting")
+DUP_DONE = ("Duplicates", (None, "412.6 GB to free in 14 folders", "g"))
+STATES = {  # key: (body, sidebar arguments)
+    "map": (map_state, {}), "tree": (tree_state, {}), "types": (types_state, {}), "largest": (largest_state, {}),
+    "scanning": (scanning_state, dict(sel="Footage SSD", **SCAN_ALL)), "idle": (idle_state, dict(sel="Archive 8TB")),
+    "search": (search_state, dict(sel="Search", query="lakeshore")),
+    "duplicates": (dup_state, dict(sel="Duplicates", tools={"Duplicates": (.64, "Verifying 64%  ·  10 Brand Film", "cy")})),
+    "copy-setup": (copy_setup_state, dict(sel="Copy & Verify", tools=dict([DUP_DONE]))),
+    "copy-running": (copy_running_state, dict(sel="Copy & Verify", tools=dict([DUP_DONE, ("Copy & Verify", (.41, "Copying 41%  ·  412 MB/s", "cy"))]))),
+    "copy-pace": (lambda: copy_running_state(True), dict(sel="Copy & Verify", tools=dict([DUP_DONE, ("Copy & Verify", (.41, "Copying 41%  ·  38 MB/s", "cy"))]))),
+    "copy-done": (copy_done_state, dict(sel="Copy & Verify", tools=dict([DUP_DONE, ("Copy & Verify", (None, "1,204 files verified", "g"))]))),
+    "check-copy": (check_copy_state, dict(sel="Copy & Verify", tools=dict([DUP_DONE, ("Copy & Verify", (None, "4 missing, 2 different", "am"))]))),
+}
 
 CSS = open(os.path.join(HERE, "interface.css")).read()
-pages = "".join(f'<section class="win" data-s="{k}">{sidebar(sc, sel)}<main class="main">{fn()}</main></section>' for k, (fn, sc, sel) in STATES.items())
+pages = "".join(f'<section class="win" data-s="{k}">{sidebar(**kw)}<main class="main">{fn()}</main></section>' for k, (fn, kw) in STATES.items())
 doc = f'''<!doctype html><html lang="en"><head><meta charset="utf-8"><title>Stowmap interface design</title><meta name="viewport" content="width=device-width,initial-scale=1">
 <style>{CSS}</style></head><body>
 <svg width="0" height="0" style="position:absolute"><defs><filter id="glow" x="-30%" y="-30%" width="160%" height="160%"><feDropShadow dx="0" dy="0" stdDeviation="7" flood-color="#40D9FF" flood-opacity=".55"/></filter></defs></svg>
