@@ -113,6 +113,51 @@ enum TreeSearch {
     }
 }
 
+// MARK: - What to leave out, and what never to collect
+
+/// Places that belong to macOS and its apps. Copies there are how the system is built
+/// (and are often clones that take no extra space), so they are not clutter.
+enum SystemPaths {
+    private static let roots = ["/System", "/Library", "/private", "/usr", "/bin", "/sbin", "/opt",
+                                "/cores", "/Applications", "/Volumes/Recovery", "/Volumes/Preboot"]
+    private static let packages = [".app", ".framework", ".bundle", ".kext", ".plugin", ".appex",
+                                   ".xpc", ".photoslibrary", ".musiclibrary", ".tvlibrary"]
+
+    /// A folder the duplicate check skips when "system and app files" are filtered out.
+    static func isSystemFolder(_ path: String) -> Bool {
+        for r in roots where path == r || path.hasPrefix(r + "/") { return true }
+        // ~/Library: caches, app support, containers.
+        if path.hasPrefix("/Users/") {
+            let parts = path.split(separator: "/", maxSplits: 3, omittingEmptySubsequences: true)
+            if parts.count >= 3, parts[2] == "Library" { return true }
+        }
+        let name = (path as NSString).lastPathComponent.lowercased()
+        for p in packages where name.hasSuffix(p) { return true }
+        return false
+    }
+
+    /// Things Stowmap refuses to put in the Collector, whatever the filters say.
+    static func isProtected(_ path: String) -> Bool {
+        for r in ["/System", "/usr", "/bin", "/sbin", "/private/var/db", "/private/var/vm", "/Library/Apple",
+                  "/cores", "/Volumes/Recovery", "/Volumes/Preboot"] where path == r || path.hasPrefix(r + "/") {
+            return true
+        }
+        return false
+    }
+}
+
+/// What the duplicate check leaves out.
+struct DupFilter: Sendable {
+    var skipSystem = true
+    var ignored: [String] = []          // folders the user chose to leave out
+
+    func excludes(_ folder: String) -> Bool {
+        if skipSystem && SystemPaths.isSystemFolder(folder) { return true }
+        for i in ignored where folder == i || folder.hasPrefix(i.hasSuffix("/") ? i : i + "/") { return true }
+        return false
+    }
+}
+
 // MARK: - Duplicates
 
 struct DupItem: Identifiable, @unchecked Sendable {
@@ -205,21 +250,29 @@ enum DuplicateFinder {
 
     /// Blocking. Three narrowing steps: same length → same samples (start, middle, end) → grouped.
     /// A group is "sampled" until `identical(_:)` reads the copies in full.
-    static func run(roots: [TreeRoot], minSize: Int64, scan: DuplicateScan) -> [DupGroup] {
+    static func run(roots: [TreeRoot], minSize: Int64, filter: DupFilter = DupFilter(),
+                    scan: DuplicateScan) -> [DupGroup] {
         // 1. Same length. Uses what the scan recorded; nothing is read from disk for most files.
         scan.set(stage: "Looking for files of the same size")
         scan.walk(total: roots.reduce(Int64(0)) { $0 + $1.root.size })
         var byLength: [Int64: [Candidate]] = [:]
         for (i, r) in roots.enumerated() {
-            var stack: [FileNode] = [r.root]
-            while let n = stack.popLast() {
+            // Paths are carried down the walk so each folder can be tested against the filter.
+            var stack: [(node: FileNode, path: String)] = [(r.root, r.root.path)]
+            while let (n, folderPath) = stack.popLast() {
                 if scan.isCancelled { return [] }
                 var leafBytes: Int64 = 0
                 for c in n.children where c.kind != .folder { leafBytes += c.size }
                 if leafBytes > 0 { scan.walked(leafBytes) }
+                let prefix = folderPath.hasSuffix("/") ? folderPath : folderPath + "/"
                 for c in n.children {
                     if c.kind == .folder {
-                        stack.append(c)
+                        let childPath = prefix + c.name
+                        if filter.excludes(childPath) {
+                            scan.walked(c.size)      // skipped, but still ground covered
+                        } else {
+                            stack.append((c, childPath))
+                        }
                     } else if c.kind == .file {
                         var length = c.logical
                         if length == 0 {

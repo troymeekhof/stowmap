@@ -278,6 +278,8 @@ final class ScanSession: ObservableObject, Identifiable {
 
     func toggleCollect(_ node: FileNode) {
         guard node.isReal, node.parent != nil else { return }
+        // Never queue macOS's own files for the Trash.
+        if !isCollected(node) && SystemPaths.isProtected(node.path) { return }
         if let i = collected.firstIndex(where: { $0 === node }) {
             collected.remove(at: i)
             return
@@ -390,6 +392,10 @@ final class AppModel: ObservableObject {
     private var verifyTimer: Timer?
     private let verifyQueue = DispatchQueue(label: "com.midjulymedia.stowmap.verify", qos: .utility)
     @Published var toolError: String?
+    /// Leave macOS and app files out of the duplicate check. On by default.
+    @Published private(set) var dupSkipSystem: Bool = UserDefaults.standard.object(forKey: "dupSkipSystem") as? Bool ?? true
+    /// Folders the user chose to leave out of the duplicate check.
+    @Published private(set) var dupIgnored: [String] = UserDefaults.standard.stringArray(forKey: "dupIgnoredFolders") ?? []
     /// nil = every scanned drive; otherwise the one drive to look within.
     @Published private(set) var dupScope: String?
     private var dupScan: DuplicateScan?
@@ -582,6 +588,7 @@ final class AppModel: ObservableObject {
     func findDuplicates(minSize: Int64) {
         guard dupPhase != .running else { return }
         let roots = duplicateRoots()
+        let filter = DupFilter(skipSystem: dupSkipSystem, ignored: dupIgnored)
         let scan = DuplicateScan()
         dupScan = scan
         dupGroups = []
@@ -593,13 +600,66 @@ final class AppModel: ObservableObject {
             Task { @MainActor in self?.dupProgress = p }
         }
         DispatchQueue.global(qos: .userInitiated).async { [weak self] in
-            let groups = DuplicateFinder.run(roots: roots, minSize: minSize, scan: scan)
+            let groups = DuplicateFinder.run(roots: roots, minSize: minSize, filter: filter, scan: scan)
             let cancelled = scan.isCancelled
             Task { @MainActor in self?.finishDuplicates(groups, cancelled: cancelled) }
         }
     }
 
     func cancelDuplicates() { dupScan?.cancel() }
+
+    // MARK: duplicate filters
+
+    func setSkipSystem(_ on: Bool) {
+        guard dupPhase != .running, on != dupSkipSystem else { return }
+        dupSkipSystem = on
+        UserDefaults.standard.set(on, forKey: "dupSkipSystem")
+        if on { pruneDuplicates() } else { resetDuplicates() }     // widening needs a fresh check
+    }
+
+    /// Leave a folder out of this and future duplicate checks.
+    func ignoreDuplicateFolder(_ path: String) {
+        guard !dupIgnored.contains(path) else { return }
+        dupIgnored.append(path)
+        dupIgnored.sort()
+        UserDefaults.standard.set(dupIgnored, forKey: "dupIgnoredFolders")
+        pruneDuplicates()
+    }
+
+    func stopIgnoring(_ path: String) {
+        dupIgnored.removeAll { $0 == path }
+        UserDefaults.standard.set(dupIgnored, forKey: "dupIgnoredFolders")
+        if dupPhase == .done { resetDuplicates() }
+    }
+
+    func chooseFolderToIgnore() {
+        let panel = NSOpenPanel()
+        panel.canChooseDirectories = true
+        panel.canChooseFiles = false
+        panel.allowsMultipleSelection = true
+        panel.showsHiddenFiles = true
+        panel.prompt = "Ignore"
+        panel.message = "Choose folders to leave out of duplicate checks"
+        guard panel.runModal() == .OK else { return }
+        for url in panel.urls { ignoreDuplicateFolder(url.standardizedFileURL.path) }
+    }
+
+    /// Applies the current filters to results already on screen.
+    private func pruneDuplicates() {
+        guard dupPhase == .done else { return }
+        let filter = DupFilter(skipSystem: dupSkipSystem, ignored: dupIgnored)
+        dupGroups = dupGroups.compactMap { g in
+            var g = g
+            g.items.removeAll { filter.excludes($0.folder) }
+            return g.items.count > 1 ? g : nil
+        }
+    }
+
+    private func resetDuplicates() {
+        guard dupPhase != .running else { return }
+        dupGroups = []
+        dupPhase = .idle
+    }
 
     private func finishDuplicates(_ groups: [DupGroup], cancelled: Bool) {
         dupTimer?.invalidate()

@@ -53,6 +53,7 @@ struct LocatedRow: View {
 
     var body: some View {
         let on = model.isCollected(node, in: volumeID)
+        let locked = SystemPaths.isProtected(node.path)
         HStack(spacing: 8) {
             NodeIcon(node: node)
             VStack(alignment: .leading, spacing: 2) {
@@ -71,14 +72,15 @@ struct LocatedRow: View {
                 .monospacedDigit().lineLimit(1).frame(width: 78, alignment: .trailing)
             IconButton(symbol: on ? "tray.full.fill" : "tray.and.arrow.down",
                        help: on ? "Remove from Collector"
-                           : (canCollect ? "Add to Collector" : "This is the last copy. Stowmap keeps one."),
+                           : (locked ? "Part of macOS. Stowmap won't collect it."
+                              : (canCollect ? "Add to Collector" : "This is the last copy. Stowmap keeps one.")),
                        tint: on ? Theme.amber : Theme.textSecondary) {
                 withAnimation(.spring(response: 0.3, dampingFraction: 0.8)) {
                     model.toggleCollect(node, in: volumeID)
                 }
             }
-            .disabled(!on && !canCollect)
-            .opacity(!on && !canCollect ? 0.3 : 1)
+            .disabled(!on && (!canCollect || locked))
+            .opacity(!on && (!canCollect || locked) ? 0.3 : 1)
             IconButton(symbol: "chart.pie", help: "Show its folder on the map") {
                 model.showOnMap(volumeID: volumeID, folderPath: node.isFolder ? node.path : folder)
             }
@@ -238,6 +240,13 @@ struct DuplicatesView: View {
         ("1 MB and up", 1), ("10 MB and up", 10), ("100 MB and up", 100), ("1 GB and up", 1000), ("10 GB and up", 10000),
     ]
 
+    /// Size, plus a count of whatever else is being left out.
+    private var filterLabel: String {
+        let size = sizes.first(where: { $0.mb == minMB })?.label ?? "10 MB and up"
+        let extra = (model.dupSkipSystem ? 1 : 0) + model.dupIgnored.count
+        return extra == 0 ? size : "\(size), \(extra) filter\(extra == 1 ? "" : "s")"
+    }
+
     private var subtitle: String {
         switch model.dupPhase {
         case .idle:
@@ -275,16 +284,30 @@ struct DuplicatesView: View {
                 .disabled(model.dupPhase == .running)
                 .help("Where to look for duplicates")
                 Menu {
-                    ForEach(sizes, id: \.mb) { s in
-                        Button(s.label) { minMB = s.mb }
+                    Picker("Smallest file to compare", selection: $minMB) {
+                        ForEach(sizes, id: \.mb) { s in
+                            Text(s.label).tag(s.mb)
+                        }
+                    }
+                    .pickerStyle(.inline)
+                    Divider()
+                    Toggle("Skip system and app files", isOn: Binding(
+                        get: { model.dupSkipSystem }, set: { model.setSkipSystem($0) }))
+                    Divider()
+                    Section("Ignored folders") {
+                        ForEach(model.dupIgnored, id: \.self) { path in
+                            Button("Stop ignoring \((path as NSString).lastPathComponent)") { model.stopIgnoring(path) }
+                                .help(path)
+                        }
+                        Button("Ignore a Folder…") { model.chooseFolderToIgnore() }
                     }
                 } label: {
-                    Label(sizes.first(where: { $0.mb == minMB })?.label ?? "10 MB and up",
-                          systemImage: "line.3.horizontal.decrease")
+                    Label(filterLabel, systemImage: "line.3.horizontal.decrease")
                         .font(.system(size: 12, weight: .semibold))
                 }
                 .menuStyle(.borderlessButton).fixedSize()
                 .disabled(model.dupPhase == .running)
+                .help("What the duplicate check includes")
                 if model.dupPhase == .running {
                     Button("Cancel") { model.cancelDuplicates() }.buttonStyle(QuietButtonStyle())
                 } else {
@@ -326,6 +349,9 @@ struct DuplicatesView: View {
                 step("1", "Same size", "Uses the sizes already in each drive's map. Nothing is read from disk.")
                 step("2", "Same samples", "Reads a small piece from the start, middle and end of each candidate. Fast, even for large clips on a network share.")
                 step("3", "Verify, when you ask", "Reads the copies from start to end and compares them. Do this before trashing anything you can't replace.")
+                Text("System and app files are left out unless you turn that off under the filter menu. Use the eye button on any folder to ignore it from then on.")
+                    .font(.system(size: 11.5)).foregroundStyle(Theme.textSecondary)
+                    .fixedSize(horizontal: false, vertical: true)
                 Text("Stowmap always leaves one copy of every set. Renamed copies are found; re-exports and transcodes of the same footage are different files and are not.")
                     .font(.system(size: 11.5)).foregroundStyle(Theme.textSecondary)
                     .fixedSize(horizontal: false, vertical: true)
@@ -518,6 +544,9 @@ private struct SideRow: View {
                 model.showOnMap(volumeID: loc.volumeID, folderPath: loc.path)
             }
             IconButton(symbol: "folder", help: "Open in Finder") { Finder.open(loc.path) }
+            IconButton(symbol: "eye.slash", help: "Ignore this folder in duplicate checks") {
+                withAnimation(.easeOut(duration: 0.2)) { model.ignoreDuplicateFolder(loc.path) }
+            }
         }
     }
 }
