@@ -13,7 +13,7 @@ struct CopyView: View {
         switch transfer.stage {
         case .setup: return "Copy files to one or more drives and prove each copy with a checksum."
         case .preparing: return "Listing what to copy…"
-        case .running: return transfer.snap.paused ? "Paused." : "Copying and verifying. You can keep working."
+        case .running: return transfer.jobLine
         case .done: return transfer.snap.phase == .stopped ? "Stopped before finishing." : "Finished."
         }
     }
@@ -21,11 +21,23 @@ struct CopyView: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 14) {
             ToolHeader(title: "Copy & Verify", subtitle: subtitle) {
-                GlassTabs(selection: $transfer.mode, tabs: [
-                    ("Copy", "square.and.arrow.down.on.square"), ("Check a Copy", "checklist"),
-                ])
-                .frame(width: 300)
-                .disabled(transfer.isBusy)
+                if transfer.mode == 0 && (transfer.stage == .running || transfer.stage == .preparing) {
+                    if transfer.snap.paused {
+                        Button { transfer.resume() } label: { Label("Resume", systemImage: "play.fill") }
+                            .buttonStyle(QuietButtonStyle(tint: Theme.cyan))
+                    } else {
+                        Button { transfer.pause() } label: { Label("Pause", systemImage: "pause.fill") }
+                            .buttonStyle(QuietButtonStyle())
+                    }
+                    Button { transfer.stop() } label: { Label("Stop", systemImage: "stop.fill") }
+                        .buttonStyle(QuietButtonStyle(tint: Theme.bad))
+                } else {
+                    GlassTabs(selection: $transfer.mode, tabs: [
+                        ("Copy", "square.and.arrow.down.on.square"), ("Check a Copy", "checklist"),
+                    ])
+                    .frame(width: 300)
+                    .disabled(transfer.isBusy)
+                }
             }
             Group {
                 if transfer.mode == 1 {
@@ -385,87 +397,81 @@ private struct CopyRunningView: View {
     var body: some View {
         let s = transfer.snap
         VStack(spacing: 14) {
-            Card(padding: 22) {
-                HStack(alignment: .center, spacing: 28) {
-                    ring(s)
-                    VStack(alignment: .leading, spacing: 14) {
-                        HStack(alignment: .firstTextBaseline, spacing: 8) {
-                            Text(speedNumber).font(.system(size: 60, weight: .bold, design: .rounded)).monospacedDigit()
-                                .contentTransition(.numericText())
-                            Text("MB/s").font(.system(size: 18, weight: .semibold, design: .rounded))
-                                .foregroundStyle(Theme.textSecondary)
-                            Spacer(minLength: 0)
-                            if s.paused { Pill(text: "Paused", color: Theme.amber) }
-                        }
-                        SpeedGraph(values: transfer.history).frame(height: 96)
-                        HStack(spacing: 26) {
-                            Stat(label: "Copied", value: "\(Fmt.bytes(s.copiedBytes)) of \(Fmt.bytes(s.totalBytes))")
-                            Stat(label: "Files", value: "\(Fmt.count(s.filesDone)) of \(Fmt.count(s.filesTotal))")
-                            Stat(label: "Time left", value: transfer.etaText?.replacingOccurrences(of: " left", with: "") ?? "Working it out")
-                            Stat(label: "Elapsed", value: elapsed(s))
-                        }
-                    }
-                }
-            }
-
+            hero(s)
             if let note = transfer.paceNote {
                 HStack(spacing: 8) {
-                    Image(systemName: "tortoise.fill").foregroundStyle(Theme.amber)
-                    Text(note).font(.system(size: 11.5)).foregroundStyle(Color.white.opacity(0.8))
+                    Image(systemName: "exclamationmark.triangle.fill").font(.system(size: 13)).foregroundStyle(Theme.amber)
+                    Text(note).font(.system(size: 12)).foregroundStyle(Theme.amber)
                         .fixedSize(horizontal: false, vertical: true)
                     Spacer(minLength: 0)
                 }
-                .padding(.horizontal, 12).padding(.vertical, 8)
-                .background(RoundedRectangle(cornerRadius: 12, style: .continuous).fill(Theme.amber.opacity(0.10)))
+                .padding(.horizontal, 6)
             }
+            lanes(s)
+            files(s)
+        }
+    }
 
-            Card(padding: 12) {
-                VStack(spacing: 10) {
-                    ForEach(Array(transfer.destNames.enumerated()), id: \.offset) { i, name in
-                        lane(s, i, name)
-                    }
-                }
-            }
+    // MARK: hero
 
-            Card(padding: 8) {
-                VStack(alignment: .leading, spacing: 4) {
-                    if !s.currentName.isEmpty {
-                        HStack(spacing: 10) {
-                            ProgressView().controlSize(.small).scaleEffect(0.7).frame(width: 16)
-                            Text("\(s.activity)  \(s.currentName)").font(.system(size: 12.5, weight: .semibold))
-                                .lineLimit(1).truncationMode(.middle)
-                            Spacer(minLength: 8)
-                            MeterBar(fraction: s.currentSize > 0 ? Double(s.currentDone) / Double(s.currentSize) : 0,
-                                     color: s.activity == "Verifying" ? Theme.green : Theme.cyan, height: 5)
-                                .frame(width: 160)
+    private func hero(_ s: TransferSnapshot) -> some View {
+        Card(padding: 22) {
+            HStack(alignment: .center, spacing: 28) {
+                ring(s)
+                VStack(alignment: .leading, spacing: 0) {
+                    HStack(alignment: .top) {
+                        HStack(alignment: .firstTextBaseline, spacing: 8) {
+                            Text(speedNumber).font(.system(size: 56, weight: .bold, design: .rounded)).monospacedDigit()
+                                .contentTransition(.numericText())
+                            Text("MB/s").font(.system(size: 18, weight: .semibold, design: .rounded))
+                                .foregroundStyle(Theme.textSecondary)
                         }
-                        .padding(.horizontal, 10).padding(.vertical, 6)
-                    }
-                    ScrollView {
-                        LazyVStack(spacing: 0) {
-                            ForEach(s.recent) { r in FileResultRow(result: r, destNames: transfer.destNames) }
+                        Spacer(minLength: 8)
+                        HStack(spacing: 14) {
+                            if s.paused { Pill(text: "Paused", color: Theme.amber) }
+                            key(AnyShapeStyle(Theme.brand), "Copied \(Fmt.pct(s.copyFraction))")
+                            key(AnyShapeStyle(Theme.green), "Verified \(Fmt.pct(s.verifyFraction))")
                         }
+                        .padding(.top, 8)
+                    }
+                    SpeedGraph(values: transfer.history).frame(height: 124)
+                        .padding(.top, 10).padding(.bottom, 16)
+                    HStack(spacing: 0) {
+                        cell("Copied", Fmt.bytes(s.copiedBytes), "of \(Fmt.bytes(s.totalBytes))", first: true)
+                        cell("Files", Fmt.count(s.filesDone), "of \(Fmt.count(s.filesTotal))")
+                        cell("Time left", transfer.etaText?.replacingOccurrences(of: " left", with: "")
+                                .replacingOccurrences(of: "about ", with: "") ?? "Working it out",
+                             transfer.verify == .off ? "copying only" : "with verifying")
+                        cell("Elapsed", elapsed(s), "started \(startClock(s))")
                     }
                 }
-            }
-            .frame(maxHeight: .infinity)
-
-            HStack(spacing: 10) {
-                if !s.problems.isEmpty {
-                    Pill(text: "\(s.problems.count) need\(s.problems.count == 1 ? "s" : "") attention", color: Theme.bad)
-                }
-                Spacer()
-                if s.paused {
-                    Button { transfer.resume() } label: { Label("Resume", systemImage: "play.fill") }
-                        .buttonStyle(QuietButtonStyle(tint: Theme.cyan))
-                } else {
-                    Button { transfer.pause() } label: { Label("Pause", systemImage: "pause.fill") }
-                        .buttonStyle(QuietButtonStyle())
-                }
-                Button { transfer.stop() } label: { Label("Stop", systemImage: "stop.fill") }
-                    .buttonStyle(QuietButtonStyle(tint: Theme.bad))
             }
         }
+    }
+
+    private func key(_ fill: AnyShapeStyle, _ text: String) -> some View {
+        HStack(spacing: 6) {
+            Circle().fill(fill).frame(width: 8, height: 8)
+            Text(text).font(.system(size: 11, weight: .medium)).monospacedDigit()
+                .foregroundStyle(Color.white.opacity(0.8))
+        }
+    }
+
+    private func cell(_ label: String, _ value: String, _ note: String, first: Bool = false) -> some View {
+        HStack(spacing: 0) {
+            if !first {
+                Rectangle().fill(Color.white.opacity(0.08)).frame(width: 1, height: 44).padding(.trailing, 16)
+            }
+            VStack(alignment: .leading, spacing: 4) {
+                Text(label).font(.system(size: 11, weight: .medium)).foregroundStyle(Theme.textSecondary)
+                Text(value).font(.system(size: 17, weight: .bold, design: .rounded)).monospacedDigit()
+                    .lineLimit(1).minimumScaleFactor(0.7)
+                Text(note).font(.system(size: 11)).foregroundStyle(Color.white.opacity(0.45)).monospacedDigit()
+                    .lineLimit(1)
+            }
+            Spacer(minLength: 0)
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
     }
 
     private var speedNumber: String {
@@ -479,40 +485,58 @@ private struct CopyRunningView: View {
                          : String(format: "%d:%02d", t / 60, t % 60)
     }
 
-    /// Two tracks: outer = copied, inner = verified. The centre shows the whole job.
+    private func startClock(_ s: TransferSnapshot) -> String {
+        let f = DateFormatter()
+        f.timeStyle = .short
+        f.dateStyle = .none
+        return f.string(from: s.started)
+    }
+
+    /// 260 pt. Outer track = copied (violet to cyan), inner = verified (green), both from 12 o'clock.
+    /// The centre shows bytes copied, then bytes verified once copying is done.
     private func ring(_ s: TransferSnapshot) -> some View {
-        ZStack {
-            Circle().stroke(Color.white.opacity(0.07), lineWidth: 16)
+        let copying = s.copyFraction < 1 || transfer.stage == .preparing
+        let shown = copying ? s.copyFraction : s.verifyFraction
+        let digits = String(Int((shown * 100).rounded(.down)))
+        return ZStack {
+            Circle().stroke(Color.white.opacity(0.07), lineWidth: 16).padding(14)
             Circle().trim(from: 0, to: max(0.002, s.copyFraction))
                 .stroke(Theme.brand, style: StrokeStyle(lineWidth: 16, lineCap: .round))
                 .rotationEffect(.degrees(-90))
-                .shadow(color: Theme.violet.opacity(0.45), radius: 10)
+                .padding(14)
+                .shadow(color: Theme.violet.opacity(0.35), radius: 10)
                 .animation(.easeOut(duration: 0.4), value: s.copyFraction)
-            Circle().stroke(Color.white.opacity(0.07), lineWidth: 10).padding(24)
+            Circle().stroke(Color.white.opacity(0.07), lineWidth: 8).padding(33)
             Circle().trim(from: 0, to: max(0.002, s.verifyFraction))
-                .stroke(Theme.green, style: StrokeStyle(lineWidth: 10, lineCap: .round))
+                .stroke(Theme.green, style: StrokeStyle(lineWidth: 8, lineCap: .round))
                 .rotationEffect(.degrees(-90))
-                .padding(24)
+                .padding(33)
                 .animation(.easeOut(duration: 0.4), value: s.verifyFraction)
-            VStack(spacing: 2) {
-                Text(Fmt.pct(s.fraction)).font(.system(size: 52, weight: .bold, design: .rounded)).monospacedDigit()
-                Text(transfer.stage == .preparing ? "Preparing" : (s.activity.isEmpty ? "Working" : s.activity))
-                    .font(.system(size: 13, weight: .semibold)).foregroundStyle(Theme.textSecondary)
-                HStack(spacing: 10) {
-                    legend(Theme.cyan, "Copied")
-                    legend(Theme.green, "Verified")
+            VStack(spacing: 6) {
+                HStack(alignment: .firstTextBaseline, spacing: 2) {
+                    Text(digits).font(.system(size: 60, weight: .bold, design: .rounded)).monospacedDigit()
+                        .tracking(-2).contentTransition(.numericText())
+                    Text("%").font(.system(size: 28, weight: .semibold, design: .rounded))
+                        .foregroundStyle(Theme.textSecondary)
                 }
-                .padding(.top, 6)
+                Text(transfer.stage == .preparing ? "Preparing" : (copying ? "Copying" : "Verifying"))
+                    .font(.system(size: 13, weight: .semibold))
+                    .foregroundStyle(copying ? Theme.cyan : Theme.green)
             }
         }
-        .frame(width: 250, height: 250)
-        .padding(8)
+        .frame(width: 260, height: 260)
     }
 
-    private func legend(_ color: Color, _ text: String) -> some View {
-        HStack(spacing: 4) {
-            Circle().fill(color).frame(width: 6, height: 6)
-            Text(text).font(.system(size: 10)).foregroundStyle(Theme.textSecondary)
+    // MARK: destinations
+
+    private func lanes(_ s: TransferSnapshot) -> some View {
+        Card(padding: 12) {
+            VStack(spacing: 0) {
+                ForEach(Array(transfer.destNames.enumerated()), id: \.offset) { i, name in
+                    if i > 0 { Rectangle().fill(Color.white.opacity(0.06)).frame(height: 1) }
+                    lane(s, i, name)
+                }
+            }
         }
     }
 
@@ -521,23 +545,163 @@ private struct CopyRunningView: View {
         let verified = i < s.destVerified.count ? s.destVerified[i] : 0
         let dead = i < s.destDead.count ? s.destDead[i] : nil
         let total = Double(max(1, s.totalBytes))
+        let parts = name.components(separatedBy: " · ")
+        let speed: Double = i < transfer.destSpeeds.count ? transfer.destSpeeds[i] : 0
+        let slow: Bool = transfer.paceNote != nil && speed > 0
+        let writing: String
+        if s.paused {
+            writing = "Paused"
+        } else if speed > 0 {
+            writing = String(format: "Writing %.0f MB/s", speed / 1_000_000)
+        } else if s.totalBytes > 0 && copied >= s.totalBytes {
+            writing = "Written"
+        } else {
+            writing = "Waiting"
+        }
         return HStack(spacing: 12) {
             Image(systemName: dead == nil ? "externaldrive.fill" : "externaldrive.badge.xmark")
-                .font(.system(size: 13)).foregroundStyle(dead == nil ? Theme.cyan : Theme.bad).frame(width: 18)
-            Text(name).font(.system(size: 12.5, weight: .semibold)).lineLimit(1).truncationMode(.middle)
-                .frame(width: 200, alignment: .leading)
+                .font(.system(size: 14, weight: .semibold)).foregroundStyle(dead == nil ? Theme.cyan : Theme.bad)
+                .frame(width: 32, height: 32)
+                .background(RoundedRectangle(cornerRadius: 9, style: .continuous).fill(Color.white.opacity(0.07)))
+            VStack(alignment: .leading, spacing: 2) {
+                Text(parts.first ?? name).font(.system(size: 12.5, weight: .semibold)).lineLimit(1).truncationMode(.middle)
+                if parts.count > 1 {
+                    Text(parts[1]).font(.system(size: 11)).foregroundStyle(Color.white.opacity(0.45)).lineLimit(1)
+                }
+            }
+            .frame(width: 150, alignment: .leading)
             if let dead {
                 Text(dead).font(.system(size: 11.5)).foregroundStyle(Theme.bad).lineLimit(2)
                 Spacer(minLength: 0)
             } else {
-                VStack(spacing: 4) {
-                    MeterBar(fraction: Double(copied) / total, color: Theme.cyan, height: 5)
-                    MeterBar(fraction: Double(verified) / total, color: Theme.green, height: 5)
+                VStack(spacing: 5) {
+                    GradientBar(fraction: Double(copied) / total, height: 6)
+                    MeterBar(fraction: Double(verified) / total, color: Theme.green, height: 4)
                 }
-                Text("\(i < s.destFilesVerified.count ? Fmt.count(s.destFilesVerified[i]) : "0") verified")
-                    .font(.system(size: 11, design: .rounded)).monospacedDigit().foregroundStyle(Theme.textSecondary)
-                    .frame(width: 96, alignment: .trailing)
+                VStack(alignment: .trailing, spacing: 2) {
+                    Text(writing)
+                        .font(.system(size: 12, weight: .semibold)).monospacedDigit()
+                        .foregroundStyle(slow ? Theme.amber : Color.white)
+                    Text("Verified \(i < s.destFilesVerified.count ? Fmt.count(s.destFilesVerified[i]) : "0") of \(Fmt.count(s.filesDone))")
+                        .font(.system(size: 11, weight: .medium)).monospacedDigit().foregroundStyle(Theme.green)
+                }
+                .frame(width: 150, alignment: .trailing)
             }
+        }
+        .padding(.vertical, 8)
+    }
+
+    // MARK: files
+
+    private func files(_ s: TransferSnapshot) -> some View {
+        Card(padding: 8) {
+            VStack(alignment: .leading, spacing: 2) {
+                HStack {
+                    Text("Files").font(.system(size: 12, weight: .semibold)).foregroundStyle(Theme.textSecondary)
+                    Spacer()
+                    if !s.problems.isEmpty {
+                        Pill(text: "\(s.problems.count) need\(s.problems.count == 1 ? "s" : "") attention", color: Theme.bad)
+                    }
+                    Text("\(Fmt.count(s.filesDone)) of \(Fmt.count(s.filesTotal))")
+                        .font(.system(size: 12, design: .rounded)).monospacedDigit().foregroundStyle(Theme.textSecondary)
+                }
+                .padding(.horizontal, 10).padding(.top, 6).padding(.bottom, 4)
+
+                if !s.currentName.isEmpty {
+                    let f = s.currentSize > 0 ? Double(s.currentDone) / Double(s.currentSize) : 0
+                    let verifying = s.activity == "Verifying"
+                    HStack(spacing: 10) {
+                        Image(systemName: "doc.fill").font(.system(size: 12)).foregroundStyle(Theme.violet).frame(width: 18)
+                        Text(s.currentName).font(.system(size: 12.5, weight: .semibold)).lineLimit(1).truncationMode(.middle)
+                        Spacer(minLength: 8)
+                        MeterBar(fraction: f, color: verifying ? Theme.green : Theme.cyan, height: 5).frame(width: 250)
+                        Text(Fmt.bytes(s.currentSize)).font(.system(size: 12, weight: .semibold, design: .rounded))
+                            .monospacedDigit().frame(width: 68, alignment: .trailing)
+                        Text(Fmt.pct(f)).font(.system(size: 12, weight: .semibold, design: .rounded)).monospacedDigit()
+                            .foregroundStyle(verifying ? Theme.green : Theme.cyan).frame(width: 70, alignment: .trailing)
+                        ProgressView().controlSize(.small).scaleEffect(0.6).frame(width: 14, height: 14)
+                    }
+                    .padding(.horizontal, 10).frame(height: 30)
+                    .background(RoundedRectangle(cornerRadius: 8, style: .continuous).fill(Color.white.opacity(0.06)))
+                }
+                ScrollView {
+                    LazyVStack(spacing: 0) {
+                        ForEach(s.recent) { r in TransferFileRow(result: r, destNames: transfer.destNames) }
+                    }
+                }
+            }
+        }
+        .frame(maxHeight: .infinity)
+    }
+}
+
+/// Violet-to-cyan progress bar, used for "copied".
+struct GradientBar: View {
+    var fraction: Double
+    var height: CGFloat = 6
+    var body: some View {
+        GeometryReader { g in
+            ZStack(alignment: .leading) {
+                Capsule().fill(Color.white.opacity(0.08))
+                Capsule().fill(LinearGradient(colors: [Theme.violet, Theme.cyan], startPoint: .leading, endPoint: .trailing))
+                    .frame(width: max(height, g.size.width * CGFloat(min(1, max(0, fraction)))))
+                    .animation(.easeOut(duration: 0.3), value: fraction)
+            }
+        }
+        .frame(height: height)
+    }
+}
+
+/// One finished file in the running list: icon, name, folder, size, checksum, state.
+private struct TransferFileRow: View {
+    var result: FileResult
+    var destNames: [String]
+
+    var body: some View {
+        let worst = result.worst
+        let folder = (result.rel as NSString).deletingLastPathComponent
+        VStack(alignment: .leading, spacing: 2) {
+            HStack(spacing: 10) {
+                Image(systemName: "doc.fill").font(.system(size: 12)).foregroundStyle(Theme.violet).frame(width: 18)
+                Text(result.name).font(.system(size: 12.5)).lineLimit(1).truncationMode(.middle)
+                Spacer(minLength: 8)
+                Text(folder).font(.system(size: 11)).foregroundStyle(Color.white.opacity(0.4))
+                    .lineLimit(1).truncationMode(.head).frame(width: 250, alignment: .leading)
+                Text(Fmt.bytes(result.size)).font(.system(size: 12, weight: .semibold, design: .rounded))
+                    .monospacedDigit().frame(width: 68, alignment: .trailing)
+                Group {
+                    if worst.isProblem {
+                        Text(problemWord(worst)).font(.system(size: 11, weight: .semibold)).foregroundStyle(stateColor(worst))
+                    } else if worst == .alreadyThere {
+                        Text("Already there").font(.system(size: 10.5, weight: .medium)).foregroundStyle(Theme.textSecondary)
+                    } else {
+                        Text(String(result.hash.prefix(8))).font(.system(size: 11, weight: .medium, design: .monospaced))
+                            .foregroundStyle(Theme.textSecondary).help(result.hash)
+                    }
+                }
+                .lineLimit(1).frame(width: 70, alignment: .trailing)
+                Image(systemName: stateSymbol(worst)).font(.system(size: 11)).foregroundStyle(stateColor(worst))
+                    .frame(width: 14)
+            }
+            .frame(height: 28)
+            if worst.isProblem {
+                ForEach(Array(result.states.enumerated()), id: \.offset) { i, st in
+                    if st.isProblem {
+                        Text("\(i < destNames.count ? destNames[i] : "Destination \(i + 1)"): \(stateText(st))")
+                            .font(.system(size: 11)).foregroundStyle(stateColor(st))
+                            .fixedSize(horizontal: false, vertical: true).padding(.leading, 28).padding(.bottom, 4)
+                    }
+                }
+            }
+        }
+        .padding(.horizontal, 10)
+    }
+
+    private func problemWord(_ s: FileState) -> String {
+        switch s {
+        case .existsDifferent: return "Skipped"
+        case .mismatch: return "Mismatch"
+        default: return "Failed"
         }
     }
 }

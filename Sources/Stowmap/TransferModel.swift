@@ -73,6 +73,9 @@ final class TransferModel: ObservableObject {
     @Published private(set) var etaText: String?
     @Published private(set) var paceNote: String?
     @Published private(set) var destNames: [String] = []
+    @Published private(set) var destSpeeds: [Double] = []   // bytes per second written, per destination
+    @Published private(set) var jobLine = ""               // "6 items from … to … · xxHash64 · verifying each destination"
+    private var lastDestCopied: [Int64] = []
 
     // Check a copy
     @Published var original: String?
@@ -207,6 +210,16 @@ final class TransferModel: ObservableObject {
         let dests = destinations.map(\.path)
         destNames = destinations.map { $0.volumeName.isEmpty ? $0.name : "\($0.volumeName) · \($0.name)" }
         stage = .preparing
+        let n = sources.count
+        let verifyText: String
+        switch verify {
+        case .destination: verifyText = "verifying each destination"
+        case .both: verifyText = "verifying source and destinations"
+        case .off: verifyText = "not verifying"
+        }
+        jobLine = "\(n) item\(n == 1 ? "" : "s") to \(destinations.map { $0.volumeName.isEmpty ? $0.name : $0.volumeName }.joined(separator: " and "))  ·  \(hash.title)  ·  \(verifyText)"
+        lastDestCopied = []
+        destSpeeds = []
         snap = TransferSnapshot()
         history = []
         peak = 0
@@ -232,6 +245,9 @@ final class TransferModel: ObservableObject {
                                 includeHidden: includeHidden, skipClutter: true, writeLists: writeLists)
         destNames = [(dest as NSString).lastPathComponent]
         mode = 0
+        jobLine = "\(plan.fileCount) missing file\(plan.fileCount == 1 ? "" : "s") to \((dest as NSString).lastPathComponent)  ·  \(hash.title)  ·  verifying"
+        lastDestCopied = []
+        destSpeeds = []
         stage = .preparing
         snap = TransferSnapshot()
         history = []
@@ -270,6 +286,11 @@ final class TransferModel: ObservableObject {
             history.append(instant / 1_000_000)
             if history.count > 240 { history.removeFirst(history.count - 240) }
             peak = max(peak, instant)
+            if lastDestCopied.count != s.destCopied.count { lastDestCopied = Array(repeating: 0, count: s.destCopied.count) }
+            destSpeeds = s.destCopied.enumerated().map { i, c in
+                s.paused ? 0 : max(0, Double(c - lastDestCopied[i]) / dt)
+            }
+            lastDestCopied = s.destCopied
             lastBytes = moved
             lastTick = now
             let left = Double((s.totalBytes + s.verifyTotal) - moved)
