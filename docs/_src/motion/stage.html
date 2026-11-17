@@ -1,0 +1,74 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="robots" content="noindex">
+<title>Stowmap motion stage</title>
+<link rel="stylesheet" href="interface.css">
+<style>
+html,body{margin:0;padding:0!important;display:block!important;background:#08080d!important}
+#stage{position:relative;overflow:hidden;background:linear-gradient(180deg,rgb(18,18,26),rgb(8,8,13));font-family:Inter,system-ui,sans-serif;color:#fff;-webkit-font-smoothing:antialiased}
+#win,#meas{position:absolute;left:0;top:0;transform-origin:0 0}
+#meas{visibility:hidden;pointer-events:none}
+#over{position:absolute;inset:0;pointer-events:none}
+#cur{position:absolute;left:0;top:0;width:28px;height:40px;transform-origin:0 0;pointer-events:none;filter:drop-shadow(0 2px 3px rgba(0,0,0,.45))}
+.title{position:absolute;inset:0;display:flex;flex-direction:column;align-items:center;justify-content:center;font-family:"Inter Display",Inter,sans-serif;font-weight:700;letter-spacing:-.04em;line-height:1.08;text-align:center}
+.title .tl{overflow:hidden;padding:0 .1em .12em}
+.title .tl span{display:block}
+.end{position:absolute;inset:0;display:flex;flex-direction:column;align-items:center;justify-content:center;text-align:center}
+.end .e-n{font-family:"Inter Display",Inter,sans-serif;font-weight:700;font-size:96px;letter-spacing:-.04em;margin-top:26px;line-height:1.1}
+.end .e-l{font-size:38px;color:rgba(255,255,255,.62);margin-top:14px;letter-spacing:-.01em}
+.ogc{position:absolute;left:64px;top:0;bottom:0;width:460px;display:flex;flex-direction:column;justify-content:center}
+.ogc img{display:block;margin-left:-8px}
+.og-n{font-family:"Inter Display",Inter,sans-serif;font-weight:700;font-size:30px;letter-spacing:-.02em;margin-top:14px;color:rgba(255,255,255,.8)}
+.og-t{font-family:"Inter Display",Inter,sans-serif;font-weight:700;font-size:44px;letter-spacing:-.04em;line-height:1.08;margin-top:14px;white-space:nowrap}
+.og-s{font-size:23px;color:rgba(255,255,255,.62);margin-top:18px;letter-spacing:-.01em}
+#stage.og #win .win{border-radius:12px!important;box-shadow:0 0 0 1px rgba(255,255,255,.08),0 30px 60px -12px rgba(0,0,0,.6)!important}
+</style>
+</head>
+<body>
+<div id="stage"><div id="win"></div><div id="over"></div>
+<svg id="cur" viewBox="0 0 28 40"><path d="M2 2v27.5l6.6-6.3 5 11.6 4.6-2-5-11.4h9.3z" fill="#000" stroke="#fff" stroke-width="2.2" stroke-linejoin="round"/></svg>
+<div id="meas"></div></div>
+<script src="icons.js"></script>
+<script src="stowmap-ui.js"></script>
+<script src="scenes.js"></script>
+<script>
+(function () {
+  const q = new URLSearchParams(location.search);
+  const name = q.get('scene') || 'hero', fmt = q.get('fmt') || 'wide', noCursor = q.has('nocursor');
+  const $ = id => document.getElementById(id);
+  const css = document.createElement('style'); css.textContent = Stow.CSS_EXTRA; document.head.appendChild(css);
+  let scene, D;
+  window.ready = fetch('campaign.json').then(r => r.json()).then(async C => {
+    D = Scenes.init(C, { stage: $('stage'), meas: $('meas') });
+    scene = Scenes.make(name);
+    $('stage').style.width = scene.w + 'px'; $('stage').style.height = scene.h + 'px';
+    if (scene.og) $('stage').classList.add('og');
+    window.SCENE = { w: scene.w, h: scene.h, dur: scene.dur, fps: C.fps };
+    await document.fonts.load('700 40px "Inter Display"'); await document.fonts.load('500 13px Inter'); await document.fonts.load('700 13px Inter');
+    await document.fonts.ready;
+    if (!document.fonts.check('500 13px Inter')) throw new Error('Inter not loaded');
+    // decode every image the scenes use before the first frame
+    const imgs = [C.brand.icon, '../../assets/img/icon-128.png'].map(src => { const i = new Image(); i.src = src; return i.decode(); });
+    await Promise.all(imgs);
+    window.seek(q.has('t') ? +q.get('t') : 0);
+    return true;
+  });
+  window.seek = function (t) {
+    const f = scene.frame(t);
+    const w = f.win || scene.win;
+    if (f.st) {
+      $('win').style.display = '';
+      $('win').style.transform = `translate(${w.x}px,${w.y}px) scale(${w.s})`;
+      $('win').innerHTML = Stow.appHTML(Object.assign({ L: scene.L }, f.st), D);
+    } else { $('win').style.display = 'none'; $('win').innerHTML = ''; }
+    $('over').innerHTML = f.over || '';
+    const c = f.cursor;
+    if (c && !noCursor && c.a > 0) { $('cur').style.display = ''; $('cur').style.opacity = c.a; $('cur').style.transform = `translate(${c.x - 3}px,${c.y - 3}px) scale(${(c.k * (scene.w >= 1900 ? 1.25 : 1.15)).toFixed(4)})`; }
+    else $('cur').style.display = 'none';
+  };
+})();
+</script>
+</body>
+</html>

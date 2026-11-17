@@ -138,7 +138,7 @@ def map_state():
 
 def tree_state():
     T = [  # depth, name, GB, kind, open, hidden, frac-of-parent
-        (0, "Users", 518.2, "folder", True, False, .66), (1, "alex", 518.2, "folder", True, False, 1.0),
+        (0, "Users", 520.1, "folder", True, False, .66), (1, "alex", 520.1, "folder", True, False, 1.0),
         (2, "Movies", 214.6, "folder", True, False, .41), (3, "Final Cut Projects", 142.8, "folder", False, False, .67),
         (3, "Proxy Media", 31.8, "folder", False, False, .15), (3, "Wedding_Highlights_Master.mov", 24.6, "video", None, False, .11),
         (3, "Drone Raw", 15.4, "folder", False, False, .07),

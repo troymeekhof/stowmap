@@ -1,0 +1,415 @@
+{
+ "project": "stowmap-launch",
+ "version": "1.0.0",
+ "fps": 30,
+ "brand": {
+  "name": "Stowmap",
+  "ground": [
+   "rgb(18,18,26)",
+   "rgb(8,8,13)"
+  ],
+  "palette": [
+   "#8C5CFF",
+   "#40D9FF",
+   "#FF7366",
+   "#FFC74D",
+   "#59EBA6",
+   "#FF8CB3",
+   "#4DBFFF",
+   "#B380FF",
+   "#FFD94D",
+   "#73F2B3"
+  ],
+  "font": {
+   "family": "Inter",
+   "note": "Stand-in for SF Pro on the Linux render host. The app and the site use the system font."
+  },
+  "icon": "../../assets/img/icon-512.png",
+  "note": "UI markup and styles come from design/interface.html + interface.css in the app repo (the app's interface design)."
+ },
+ "copy": {
+  "hook": [
+   "See what's taking up",
+   "space on your Mac."
+  ],
+  "end": {
+   "name": "Stowmap",
+   "line": "Free for macOS 13 or later",
+   "sub": "troymeekhof.github.io/stowmap"
+  },
+  "og": {
+   "title": [
+    "See what's taking up",
+    "space on your Mac."
+   ],
+   "sub": "A free disk space analyzer for macOS"
+  }
+ },
+ "claims": {
+  "policy": "strict",
+  "approved": [
+   {
+    "text": "Free for macOS 13 or later",
+    "source": "product brief"
+   },
+   {
+    "text": "A free disk space analyzer for macOS",
+    "source": "product brief"
+   }
+  ],
+  "note": "Numbers inside the app window are sample data from the interface design, not claims."
+ },
+ "scenes": {
+  "hero": {
+   "w": 1920,
+   "h": 1080,
+   "dur": 18,
+   "beats": [
+    "title 0-2.2",
+    "scan 2.3-5.1",
+    "map + drill 5.1-10.4",
+    "collect + trash 10.4-15",
+    "end card 15.6-18"
+   ],
+   "web_cut": "The page plays stowmap-hero (from 2.2 s, 15.8 s long): the title card is dropped because the page's own h1 sits right above the video. stowmap-launch.mp4 is the full 18 s cut with the title card, for sharing."
+  },
+  "scan": {
+   "w": 1200,
+   "h": 1000,
+   "dur": 9.5,
+   "beats": [
+    "pick a drive",
+    "Scan",
+    "mapping",
+    "map",
+    "back to the saved map"
+   ]
+  },
+  "drill": {
+   "w": 1200,
+   "h": 994,
+   "dur": 9,
+   "beats": [
+    "hover a slice",
+    "click in twice",
+    "read a slice",
+    "breadcrumb back"
+   ]
+  },
+  "collect": {
+   "w": 1200,
+   "h": 994,
+   "dur": 8.5,
+   "beats": [
+    "collect three hidden folders",
+    "total adds up",
+    "Move to Trash"
+   ]
+  }
+ },
+ "data": {
+  "groups": [
+   [
+    "Internal",
+    [
+     "mac"
+    ]
+   ],
+   [
+    "External",
+    [
+     "ssd",
+     "arc"
+    ]
+   ],
+   [
+    "Network",
+    [
+     "nas"
+    ]
+   ],
+   [
+    "Folders",
+    [
+     "fold"
+    ]
+   ]
+  ],
+  "vols": {
+   "mac": {
+    "name": "Macintosh HD",
+    "icon": "hard-drive",
+    "frac": 0.787,
+    "sub": "212.3 GB free of 994.7 GB",
+    "scanned": true,
+    "head": "Startup disk  ·  APFS  ·  782.4 GB used of 994.7 GB  ·  212.3 GB free",
+    "files": "1.4M files",
+    "used": 782.4,
+    "fileCount": 1412608,
+    "elapsed": 38,
+    "ticks": 18,
+    "paths": [
+     "/Users/alex/Movies/Final Cut Projects/Renders",
+     "/Users/alex/Library/Containers/com.docker.docker/Data",
+     "/Users/alex/Pictures/Photos Library.photoslibrary/database",
+     "/Applications/Utilities",
+     "/Library/Application Support",
+     "/Users/alex/Developer/node_modules",
+     "/private/var/folders",
+     "/Users/alex/Music/Sessions",
+     "/System/Library/Frameworks",
+     "/Users/alex/Movies/Proxy Media",
+     "/opt/homebrew/Cellar",
+     "/Users/alex/Documents/Lightroom"
+    ]
+   },
+   "ssd": {
+    "name": "Footage SSD",
+    "icon": "usb",
+    "frac": 0.61,
+    "sub": "776.4 GB free of 2 TB",
+    "scanned": true,
+    "head": "External  ·  APFS  ·  1.22 TB used of 2 TB  ·  776.4 GB free",
+    "files": "862K files"
+   },
+   "arc": {
+    "name": "Archive 8TB",
+    "icon": "hard-drives",
+    "frac": 0.93,
+    "sub": "548.1 GB free of 8 TB",
+    "scanned": false,
+    "head": "External  ·  Mac OS Extended  ·  7.45 TB used of 8 TB  ·  548.1 GB free",
+    "files": "412K files",
+    "used": 7450,
+    "fileCount": 412318,
+    "elapsed": 86,
+    "ticks": 18,
+    "facts": [
+     [
+      "Capacity",
+      "8 TB"
+     ],
+     [
+      "Used",
+      "7.45 TB"
+     ],
+     [
+      "Free",
+      "548.1 GB"
+     ],
+     [
+      "Format",
+      "Mac OS Extended"
+     ],
+     [
+      "Location",
+      "/Volumes/Archive 8TB"
+     ],
+     [
+      "Last scanned",
+      "Never"
+     ]
+    ],
+    "paths": [
+     "/Volumes/Archive 8TB/2025/06 Harbor Wedding/A-Cam/Card 02",
+     "/Volumes/Archive 8TB/2025/06 Harbor Wedding/Drone",
+     "/Volumes/Archive 8TB/2024/09 Brand Film/Proxies",
+     "/Volumes/Archive 8TB/2024/09 Brand Film/Audio/Stems",
+     "/Volumes/Archive 8TB/.Spotlight-V100/Store-V2",
+     "/Volumes/Archive 8TB/2023/10 Elopement/B-Cam/Card 01",
+     "/Volumes/Archive 8TB/Final Deliveries/2025",
+     "/Volumes/Archive 8TB/Raw Photos/Lightroom Catalog",
+     "/Volumes/Archive 8TB/Stock and Music/Licensed",
+     "/Volumes/Archive 8TB/Old Projects/2021"
+    ]
+   },
+   "nas": {
+    "name": "Studio NAS",
+    "icon": "network",
+    "frac": 0.48,
+    "sub": "18.6 TB free of 36 TB",
+    "scanned": true,
+    "head": ""
+   },
+   "fold": {
+    "name": "Client Deliveries",
+    "icon": "folder",
+    "frac": null,
+    "sub": "~/Documents/Client Deliveries",
+    "scanned": true,
+    "head": ""
+   }
+  },
+  "nodes": {
+   "mac:": {
+    "name": "Macintosh HD",
+    "items": [
+     {
+      "n": "Users",
+      "s": 518.2
+     },
+     {
+      "n": "Hidden space",
+      "s": 86.1,
+      "k": "hidden"
+     },
+     {
+      "n": "Applications",
+      "s": 74.2
+     },
+     {
+      "n": "Library",
+      "s": 41.8
+     },
+     {
+      "n": "System",
+      "s": 28.6
+     },
+     {
+      "n": "private",
+      "s": 19.4,
+      "h": 1
+     },
+     {
+      "n": "opt",
+      "s": 9.7
+     },
+     {
+      "n": "usr",
+      "s": 2.9,
+      "h": 1
+     },
+     {
+      "n": ".Spotlight-V100",
+      "s": 1.1,
+      "h": 1
+     },
+     {
+      "n": "38 small files",
+      "s": 0.4,
+      "k": "small"
+     }
+    ]
+   },
+   "mac:Users": {
+    "name": "Users",
+    "items": [
+     {
+      "n": "alex",
+      "s": 518.2
+     }
+    ]
+   },
+   "mac:Users/alex": {
+    "name": "alex",
+    "items": [
+     {
+      "n": "Movies",
+      "s": 214.6
+     },
+     {
+      "n": "Library",
+      "s": 96.3
+     },
+     {
+      "n": "Pictures",
+      "s": 81.2
+     },
+     {
+      "n": "Developer",
+      "s": 44.9
+     },
+     {
+      "n": "Documents",
+      "s": 31.5
+     },
+     {
+      "n": "Music",
+      "s": 18.4
+     },
+     {
+      "n": ".Trash",
+      "s": 12.7,
+      "h": 1
+     },
+     {
+      "n": "Downloads",
+      "s": 9.8
+     },
+     {
+      "n": ".cache",
+      "s": 4.1,
+      "h": 1
+     },
+     {
+      "n": ".docker",
+      "s": 2.4,
+      "h": 1
+     },
+     {
+      "n": "Desktop",
+      "s": 2.3
+     },
+     {
+      "n": "Screen Recording 2026-11-02.mov",
+      "s": 1.9,
+      "k": "video"
+     },
+     {
+      "n": "212 small files",
+      "s": 0.014,
+      "k": "small"
+     }
+    ]
+   },
+   "arc:": {
+    "name": "Archive 8TB",
+    "items": [
+     {
+      "n": "2025",
+      "s": 2310
+     },
+     {
+      "n": "2024",
+      "s": 1960
+     },
+     {
+      "n": "2023",
+      "s": 1420
+     },
+     {
+      "n": "Final Deliveries",
+      "s": 684.2
+     },
+     {
+      "n": "Stock and Music",
+      "s": 512.6
+     },
+     {
+      "n": "Raw Photos",
+      "s": 391.8
+     },
+     {
+      "n": "Old Projects",
+      "s": 168.5
+     },
+     {
+      "n": ".Trashes",
+      "s": 1.4,
+      "h": 1
+     },
+     {
+      "n": ".Spotlight-V100",
+      "s": 1.2,
+      "h": 1
+     },
+     {
+      "n": ".fseventsd",
+      "s": 0.3,
+      "h": 1
+     }
+    ]
+   }
+  }
+ }
+}

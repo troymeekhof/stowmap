@@ -1,0 +1,5 @@
+User-agent: *
+Allow: /
+Disallow: /stowmap/_src/
+Disallow: /stowmap/_qa/
+Sitemap: https://troymeekhof.github.io/stowmap/sitemap.xml
