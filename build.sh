@@ -47,7 +47,12 @@ cp "$BIN" "$APP/Contents/MacOS/Stowmap"
 # Sparkle (auto-updates). The SwiftPM xcframework slice is already universal.
 ditto "$(dirname "$ARM")/Sparkle.framework" "$APP/Contents/Frameworks/Sparkle.framework"
 cp Resources/Info.plist "$APP/Contents/Info.plist"
-[ -f Resources/Stowmap.icns ] && cp Resources/Stowmap.icns "$APP/Contents/Resources/Stowmap.icns"
+# Icon: let Apple's iconutil build it from the PNG set; fall back to the prebuilt file.
+if [ -d Resources/Stowmap.iconset ] && iconutil -c icns Resources/Stowmap.iconset -o "$APP/Contents/Resources/Stowmap.icns" 2>/dev/null; then
+  echo "▸ Icon built with iconutil"
+elif [ -f Resources/Stowmap.icns ]; then
+  cp Resources/Stowmap.icns "$APP/Contents/Resources/Stowmap.icns"
+fi
 xattr -cr "$APP" 2>/dev/null || true
 
 # Sign inside-out (Sparkle's helpers first, then the app). Ad-hoc by default so macOS lets
