@@ -24,20 +24,20 @@
 	<string>public.app-category.utilities</string>
 	<key>LSMinimumSystemVersion</key>
 	<string>13.0</string>
-	<key>NSHighResolutionCapable</key>
-	<true/>
-	<key>NSSupportsAutomaticGraphicsSwitching</key>
-	<true/>
 	<key>NSDesktopFolderUsageDescription</key>
 	<string>Stowmap measures the files in your Desktop folder to show what is using space.</string>
 	<key>NSDocumentsFolderUsageDescription</key>
 	<string>Stowmap measures the files in your Documents folder to show what is using space.</string>
 	<key>NSDownloadsFolderUsageDescription</key>
 	<string>Stowmap measures the files in your Downloads folder to show what is using space.</string>
+	<key>NSHighResolutionCapable</key>
+	<true/>
 	<key>NSNetworkVolumesUsageDescription</key>
 	<string>Stowmap measures the files on network drives to show what is using space.</string>
 	<key>NSRemovableVolumesUsageDescription</key>
 	<string>Stowmap measures the files on external drives to show what is using space.</string>
+	<key>NSSupportsAutomaticGraphicsSwitching</key>
+	<true/>
 	<key>SUAutomaticallyUpdate</key>
 	<false/>
 	<key>SUEnableAutomaticChecks</key>
