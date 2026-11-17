@@ -6,7 +6,7 @@ const [,, scene, out, ...rest] = process.argv;
 const a = {}; for (let i = 0; i < rest.length; i += 2) a[rest[i].replace(/^--/, '')] = rest[i + 1];
 (async () => {
   const b = await chromium.launch();
-  const p = await b.newPage({ viewport: { width: 1920, height: 1100 }, deviceScaleFactor: 1 });
+  const p = await b.newPage({ viewport: { width: 1920, height: 1300 }, deviceScaleFactor: 1 });
   p.on('pageerror', e => { console.error('PAGE ERROR', e.message); process.exit(1); });
   await p.goto(`http://localhost:8777/_src/motion/stage.html?scene=${scene}`);
   await p.waitForFunction(() => typeof window.seek === 'function');

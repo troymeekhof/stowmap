@@ -18,6 +18,10 @@ html,body{margin:0;padding:0!important;display:block!important;background:#08080
 .end{position:absolute;inset:0;display:flex;flex-direction:column;align-items:center;justify-content:center;text-align:center}
 .end .e-n{font-family:"Inter Display",Inter,sans-serif;font-weight:700;font-size:96px;letter-spacing:-.04em;margin-top:26px;line-height:1.1}
 .end .e-l{font-size:38px;color:rgba(255,255,255,.62);margin-top:14px;letter-spacing:-.01em}
+.endc{position:absolute;left:120px;top:0;bottom:0;width:600px;display:flex;flex-direction:column;justify-content:center}
+.endc img{display:block;margin-left:-12px}
+.endc .e-n{font-family:"Inter Display",Inter,sans-serif;font-weight:700;font-size:92px;letter-spacing:-.04em;margin-top:18px;line-height:1.1}
+.endc .e-l{font-size:34px;color:rgba(255,255,255,.62);margin-top:14px;letter-spacing:-.01em}
 .ogc{position:absolute;left:64px;top:0;bottom:0;width:460px;display:flex;flex-direction:column;justify-content:center}
 .ogc img{display:block;margin-left:-8px}
 .og-n{font-family:"Inter Display",Inter,sans-serif;font-weight:700;font-size:30px;letter-spacing:-.02em;margin-top:14px;color:rgba(255,255,255,.8)}
@@ -44,7 +48,6 @@ html,body{margin:0;padding:0!important;display:block!important;background:#08080
     D = Scenes.init(C, { stage: $('stage'), meas: $('meas') });
     scene = Scenes.make(name);
     $('stage').style.width = scene.w + 'px'; $('stage').style.height = scene.h + 'px';
-    if (scene.og) $('stage').classList.add('og');
     window.SCENE = { w: scene.w, h: scene.h, dur: scene.dur, fps: C.fps };
     await document.fonts.load('700 40px "Inter Display"'); await document.fonts.load('500 13px Inter'); await document.fonts.load('700 13px Inter');
     await document.fonts.ready;
@@ -64,6 +67,7 @@ html,body{margin:0;padding:0!important;display:block!important;background:#08080
       $('win').innerHTML = Stow.appHTML(Object.assign({ L: scene.L }, f.st), D);
     } else { $('win').style.display = 'none'; $('win').innerHTML = ''; }
     $('over').innerHTML = f.over || '';
+    $('stage').classList.toggle('og', !!(scene.og || f.framed));
     const c = f.cursor;
     if (c && !noCursor && c.a > 0) { $('cur').style.display = ''; $('cur').style.opacity = c.a; $('cur').style.transform = `translate(${c.x - 3}px,${c.y - 3}px) scale(${(c.k * (scene.w >= 1900 ? 1.25 : 1.15)).toFixed(4)})`; }
     else $('cur').style.display = 'none';
