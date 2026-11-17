@@ -161,6 +161,26 @@ struct Sidebar: View {
         .background(Color.black.opacity(0.18))
     }
 
+    private var dupBusy: Bool { model.dupPhase == .running || model.isVerifying }
+
+    private var dupFraction: Double {
+        model.dupPhase == .running ? model.dupProgress.fraction : model.verifyOverall
+    }
+
+    private var dupStatus: String {
+        if model.dupPhase == .running {
+            let stage = model.dupProgress.total > 0 ? "Comparing files" : "Reading maps"
+            return "\(stage)  \(Fmt.pct(model.dupProgress.fraction))"
+        }
+        if model.isVerifying { return "Verifying copies  \(Fmt.pct(model.verifyOverall))" }
+        if model.dupPhase == .done {
+            if model.dupMatches.isEmpty { return "None found in \(model.dupScopeName)" }
+            let wasted = model.dupGroups.reduce(Int64(0)) { $0 + $1.wasted }
+            return "\(Fmt.bytes(wasted)) to free in \(Fmt.count(model.dupMatches.count)) folder\(model.dupMatches.count == 1 ? "" : "s")"
+        }
+        return "Find identical files"
+    }
+
     /// Search box and Duplicates: the two tools that look across every drive.
     private var tools: some View {
         VStack(spacing: 6) {
@@ -185,23 +205,46 @@ struct Sidebar: View {
             .padding(.horizontal, 10).padding(.vertical, 7)
             .background(RoundedRectangle(cornerRadius: 9, style: .continuous)
                 .fill(Color.white.opacity(model.pane == .search ? 0.10 : 0.06)))
+            if model.searchBusy {
+                MeterBar(fraction: model.searchProgress, color: Theme.cyan)
+                    .animation(.easeOut(duration: 0.15), value: model.searchProgress)
+                    .padding(.horizontal, 4)
+            }
 
             Button {
                 withAnimation(.easeOut(duration: 0.18)) { model.pane = .duplicates }
             } label: {
-                HStack(spacing: 8) {
-                    Image(systemName: "doc.on.doc.fill").font(.system(size: 11, weight: .semibold))
-                        .foregroundStyle(model.pane == .duplicates ? Color.white : Theme.textSecondary)
-                    Text("Duplicates").font(.system(size: 12.5, weight: .semibold))
-                    Spacer(minLength: 0)
-                    if !model.dupMatches.isEmpty {
-                        Text(Fmt.count(model.dupMatches.count)).font(.system(size: 10.5, weight: .semibold, design: .rounded))
-                            .monospacedDigit().foregroundStyle(Theme.textSecondary)
+                // Laid out like a drive row: icon tile, name, a bar while it works, a line of status.
+                HStack(spacing: 10) {
+                    ZStack {
+                        RoundedRectangle(cornerRadius: 9, style: .continuous)
+                            .fill(model.pane == .duplicates ? AnyShapeStyle(Theme.brand) : AnyShapeStyle(Color.white.opacity(0.08)))
+                        Image(systemName: "doc.on.doc.fill").font(.system(size: 12, weight: .semibold))
+                    }
+                    .frame(width: 32, height: 32)
+                    VStack(alignment: .leading, spacing: 4) {
+                        HStack(spacing: 6) {
+                            Text("Duplicates").font(.system(size: 12.5, weight: .semibold))
+                            Spacer(minLength: 0)
+                            if dupBusy {
+                                ProgressView().controlSize(.small).scaleEffect(0.7).frame(width: 14, height: 14)
+                            } else if model.dupPhase == .done {
+                                Image(systemName: "checkmark.circle.fill").font(.system(size: 10))
+                                    .foregroundStyle(Theme.good.opacity(0.8))
+                            }
+                        }
+                        if dupBusy {
+                            MeterBar(fraction: dupFraction, color: Theme.cyan)
+                                .animation(.easeOut(duration: 0.2), value: dupFraction)
+                        }
+                        Text(dupStatus)
+                            .font(.system(size: 10)).foregroundStyle(Theme.textSecondary)
+                            .monospacedDigit().lineLimit(1)
                     }
                 }
-                .padding(.horizontal, 10).padding(.vertical, 7)
-                .background(RoundedRectangle(cornerRadius: 9, style: .continuous)
-                    .fill(Color.white.opacity(model.pane == .duplicates ? 0.10 : 0.0001)))
+                .padding(8)
+                .background(RoundedRectangle(cornerRadius: 12, style: .continuous)
+                    .fill(Color.white.opacity(model.pane == .duplicates ? 0.09 : 0.0001)))
                 .contentShape(Rectangle())
             }
             .buttonStyle(.plain)
