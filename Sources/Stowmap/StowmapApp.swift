@@ -31,6 +31,8 @@ struct StowmapApp: App {
             CommandGroup(replacing: .newItem) {
                 Button("Scan a Folder…") { model.chooseFolder() }
                     .keyboardShortcut("o", modifiers: .command)
+                Button("Scan All Drives") { model.scanAll() }
+                    .keyboardShortcut("r", modifiers: [.command, .shift])
             }
         }
     }

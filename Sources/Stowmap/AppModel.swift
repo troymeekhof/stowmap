@@ -115,6 +115,8 @@ final class ScanSession: ObservableObject, Identifiable {
     private var timer: Timer?
     /// Called when this session gains or replaces a result, so the app can account for sibling shares.
     var onResultChanged: (() -> Void)?
+    /// Called when a scan starts, and when it ends for any reason (finished or cancelled).
+    var onScanStateChanged: (() -> Void)?
 
     init(volume: Volume) {
         self.volume = volume
@@ -145,6 +147,7 @@ final class ScanSession: ObservableObject, Identifiable {
         startedAt = Date()
         phase = .scanning
         collected = []
+        onScanStateChanged?()
 
         timer?.invalidate()
         timer = Timer.scheduledTimer(withTimeInterval: 0.12, repeats: true) { [weak self] t in
@@ -177,6 +180,7 @@ final class ScanSession: ObservableObject, Identifiable {
         timer?.invalidate()
         timer = nil
         ctx = nil
+        defer { onScanStateChanged?() }
         if cancelled {
             phase = result == nil ? .idle : .done
             return
@@ -463,7 +467,42 @@ final class AppModel: ObservableObject {
             guard let self, let s else { return }
             self.rebalancePool(of: s.volume)
         }
+        s.onScanStateChanged = { [weak self] in self?.advanceScanAll() }
         return s
+    }
+
+    // MARK: scan every drive
+
+    /// Network shares waiting their turn in a "scan all": they run one at a time so a server
+    /// isn't asked to list several shares at once.
+    @Published private(set) var scanAllPending: [String] = []
+
+    var scanningCount: Int { sessions.values.filter { $0.isScanning }.count }
+    var anyScanned: Bool { sessions.values.contains { $0.result != nil } }
+
+    /// Scans or rescans every drive in the sidebar. Local drives start together; network shares queue.
+    func scanAll() {
+        let drives = volumes.filter { $0.kind != .folder }
+        for v in drives where v.kind != .network { sessions[v.id]?.start() }
+        scanAllPending = drives.filter { $0.kind == .network }.map(\.id)
+        advanceScanAll()
+    }
+
+    private func advanceScanAll() {
+        defer { objectWillChange.send() }       // the sidebar's scan-all button reads live counts
+        while !scanAllPending.isEmpty {
+            if sessions.values.contains(where: { $0.volume.kind == .network && $0.isScanning }) { return }
+            let next = scanAllPending.removeFirst()
+            if let s = sessions[next] {
+                s.start()
+                return
+            }
+        }
+    }
+
+    func stopAllScans() {
+        scanAllPending = []
+        for s in sessions.values where s.isScanning { s.cancel() }
     }
 
     /// Recomputes the "what else is on this server" entries for every scanned share on one pool.

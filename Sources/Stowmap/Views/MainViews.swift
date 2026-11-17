@@ -134,6 +134,8 @@ struct Sidebar: View {
             }
 
             Divider().overlay(Color.white.opacity(0.06))
+            scanAllControl
+                .padding(.horizontal, 12).padding(.top, 12)
             HStack(spacing: 8) {
                 Button { model.chooseFolder() } label: {
                     Label("Scan a Folder…", systemImage: "folder.badge.plus")
@@ -159,6 +161,33 @@ struct Sidebar: View {
             .padding(12)
         }
         .background(Color.black.opacity(0.18))
+    }
+
+    /// One button for every drive: scan them all, or stop while they run.
+    @ViewBuilder
+    private var scanAllControl: some View {
+        let running = model.scanningCount
+        let waiting = model.scanAllPending.count
+        if running > 0 || waiting > 0 {
+            HStack(spacing: 8) {
+                ProgressView().controlSize(.small).scaleEffect(0.7).frame(width: 14, height: 14)
+                Text("Scanning \(running) drive\(running == 1 ? "" : "s")" + (waiting > 0 ? ", \(waiting) waiting" : ""))
+                    .font(.system(size: 11.5, weight: .semibold)).monospacedDigit()
+                    .foregroundStyle(Theme.textSecondary).lineLimit(1)
+                Spacer(minLength: 0)
+                Button("Stop") { model.stopAllScans() }
+                    .buttonStyle(QuietButtonStyle())
+                    .help("Stop every scan that is running or waiting")
+            }
+        } else {
+            Button { model.scanAll() } label: {
+                Label(model.anyScanned ? "Rescan All Drives" : "Scan All Drives",
+                      systemImage: "arrow.triangle.2.circlepath")
+                    .frame(maxWidth: .infinity)
+            }
+            .buttonStyle(QuietButtonStyle())
+            .help("Scan every drive in the sidebar. Network shares run one at a time. (⇧⌘R)")
+        }
     }
 
     private var dupBusy: Bool { model.dupPhase == .running || model.isVerifying }
