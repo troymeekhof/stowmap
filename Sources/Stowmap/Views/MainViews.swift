@@ -93,6 +93,7 @@ struct Sidebar: View {
     @EnvironmentObject var updater: Updater
     @EnvironmentObject var transfer: TransferModel
     @FocusState private var searchFocused: Bool
+    @State private var showFeedback = false
 
     private let groups: [(title: String, kinds: [Volume.Kind])] = [
         ("Internal", [.boot, .internalDrive]),
@@ -165,9 +166,11 @@ struct Sidebar: View {
                 }
                 .buttonStyle(QuietButtonStyle())
                 Spacer(minLength: 0)
+                IconButton(symbol: "bubble.left.and.text.bubble.right", help: "Leave feedback") { showFeedback = true }
                 Menu {
                     Button("Check for Updates…") { updater.checkForUpdates() }
                         .disabled(!updater.canCheck)
+                    Button("Leave Feedback…") { showFeedback = true }
                     Button("Full Disk Access Settings…") { Finder.openFullDiskAccessSettings() }
                     Divider()
                     Text("Stowmap \(version)")
@@ -184,6 +187,7 @@ struct Sidebar: View {
             .padding(12)
         }
         .background(Color.black.opacity(0.18))
+        .sheet(isPresented: $showFeedback) { FeedbackSheet() }
     }
 
     /// One button for every drive: scan them all, or stop while they run.
@@ -368,6 +372,102 @@ struct Sidebar: View {
                 .keyboardShortcut("f", modifiers: .command)
                 .opacity(0).frame(width: 0, height: 0)
         }
+    }
+}
+
+/// Where feedback goes. An email address in Info.plist (StowmapFeedbackEmail) opens a ready-to-send
+/// message in the user's mail app; without one, it opens a new issue on the project's GitHub page.
+enum Feedback {
+    static var email: String? {
+        let v = Bundle.main.infoDictionary?["StowmapFeedbackEmail"] as? String
+        return (v?.isEmpty ?? true) ? nil : v
+    }
+
+    static var details: String {
+        let app = Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "dev"
+        let os = ProcessInfo.processInfo.operatingSystemVersion
+        return "Stowmap \(app) · macOS \(os.majorVersion).\(os.minorVersion).\(os.patchVersion)"
+    }
+
+    static func send(_ text: String, kind: String) {
+        let body = text.trimmingCharacters(in: .whitespacesAndNewlines) + "\n\n—\n" + details
+        var c = URLComponents()
+        if let email {
+            c.scheme = "mailto"
+            c.path = email
+            c.queryItems = [URLQueryItem(name: "subject", value: "Stowmap feedback: \(kind)"),
+                            URLQueryItem(name: "body", value: body)]
+        } else {
+            c.scheme = "https"
+            c.host = "github.com"
+            c.path = "/troymeekhof/stowmap/issues/new"
+            c.queryItems = [URLQueryItem(name: "title", value: "\(kind): "),
+                            URLQueryItem(name: "body", value: body)]
+        }
+        // Mail apps want spaces as %20, not "+".
+        if let url = c.url.flatMap({ URL(string: $0.absoluteString.replacingOccurrences(of: "+", with: "%20")) }) {
+            NSWorkspace.shared.open(url)
+        }
+    }
+}
+
+struct FeedbackSheet: View {
+    @Environment(\.dismiss) private var dismiss
+    @State private var text = ""
+    @State private var kind = "Idea"
+    private let kinds = ["Idea", "Problem", "Praise", "Question"]
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 14) {
+            HStack(spacing: 10) {
+                Image(systemName: "bubble.left.and.text.bubble.right.fill").font(.system(size: 20))
+                    .foregroundStyle(Theme.brand)
+                VStack(alignment: .leading, spacing: 2) {
+                    Text("Leave feedback").font(.system(size: 18, weight: .bold, design: .rounded))
+                    Text("Stowmap is made by one independent creator. Every message gets read.")
+                        .font(.system(size: 12)).foregroundStyle(Theme.textSecondary)
+                }
+            }
+            Picker("", selection: $kind) {
+                ForEach(kinds, id: \.self) { Text($0).tag($0) }
+            }
+            .pickerStyle(.segmented).labelsHidden()
+            TextEditor(text: $text)
+                .font(.system(size: 13))
+                .scrollContentBackground(.hidden)
+                .padding(8)
+                .background(RoundedRectangle(cornerRadius: 10, style: .continuous).fill(Color.white.opacity(0.06)))
+                .frame(minHeight: 150)
+                .overlay(alignment: .topLeading) {
+                    if text.isEmpty {
+                        Text("What happened, or what would make this better for you?")
+                            .font(.system(size: 13)).foregroundStyle(Theme.textTertiary)
+                            .padding(.horizontal, 13).padding(.vertical, 8).allowsHitTesting(false)
+                    }
+                }
+            Text(Feedback.email == nil
+                 ? "Send opens a new issue on the project's GitHub page with your note filled in. It's public, and needs a free GitHub account. Sent with it: \(Feedback.details)."
+                 : "Send opens a message in your mail app with your note filled in, so you can check it before it goes. Sent with it: \(Feedback.details).")
+                .font(.system(size: 11)).foregroundStyle(Theme.textSecondary)
+                .fixedSize(horizontal: false, vertical: true)
+            HStack {
+                Spacer()
+                Button("Cancel") { dismiss() }.buttonStyle(QuietButtonStyle()).keyboardShortcut(.cancelAction)
+                Button {
+                    Feedback.send(text, kind: kind)
+                    dismiss()
+                } label: { Label("Send", systemImage: "paperplane.fill") }
+                    .buttonStyle(GlowButtonStyle())
+                    .disabled(text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+                    .opacity(text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? 0.45 : 1)
+                    .keyboardShortcut(.defaultAction)
+            }
+        }
+        .padding(22)
+        .frame(width: 480)
+        .background(Theme.windowBackground)
+        .foregroundStyle(.white)
+        .preferredColorScheme(.dark)
     }
 }
 
