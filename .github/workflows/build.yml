@@ -1,0 +1,27 @@
+name: Build
+
+on:
+  push:
+    branches: [main]
+    paths-ignore: ["docs/**", "*.md", "appcast.xml"]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Swift version
+        run: swift --version
+      - name: Build universal app (ad-hoc signed)
+        run: DMG_OUT="$RUNNER_TEMP/Stowmap.dmg" ./build.sh --package
+      - name: Upload DMG
+        uses: actions/upload-artifact@v4
+        with:
+          name: Stowmap-dmg
+          path: ${{ runner.temp }}/Stowmap.dmg
+          retention-days: 14

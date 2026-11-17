@@ -1,0 +1,52 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<key>CFBundleDisplayName</key>
+	<string>Stowmap</string>
+	<key>CFBundleExecutable</key>
+	<string>Stowmap</string>
+	<key>CFBundleIconFile</key>
+	<string>Stowmap</string>
+	<key>CFBundleIdentifier</key>
+	<string>com.midjulymedia.stowmap</string>
+	<key>CFBundleInfoDictionaryVersion</key>
+	<string>6.0</string>
+	<key>CFBundleName</key>
+	<string>Stowmap</string>
+	<key>CFBundlePackageType</key>
+	<string>APPL</string>
+	<key>CFBundleShortVersionString</key>
+	<string>1.0</string>
+	<key>CFBundleVersion</key>
+	<string>1.0</string>
+	<key>LSApplicationCategoryType</key>
+	<string>public.app-category.utilities</string>
+	<key>LSMinimumSystemVersion</key>
+	<string>13.0</string>
+	<key>NSHighResolutionCapable</key>
+	<true/>
+	<key>NSSupportsAutomaticGraphicsSwitching</key>
+	<true/>
+	<key>NSDesktopFolderUsageDescription</key>
+	<string>Stowmap measures the files in your Desktop folder to show what is using space.</string>
+	<key>NSDocumentsFolderUsageDescription</key>
+	<string>Stowmap measures the files in your Documents folder to show what is using space.</string>
+	<key>NSDownloadsFolderUsageDescription</key>
+	<string>Stowmap measures the files in your Downloads folder to show what is using space.</string>
+	<key>NSNetworkVolumesUsageDescription</key>
+	<string>Stowmap measures the files on network drives to show what is using space.</string>
+	<key>NSRemovableVolumesUsageDescription</key>
+	<string>Stowmap measures the files on external drives to show what is using space.</string>
+	<key>SUAutomaticallyUpdate</key>
+	<false/>
+	<key>SUEnableAutomaticChecks</key>
+	<true/>
+	<key>SUFeedURL</key>
+	<string>https://raw.githubusercontent.com/troymeekhof/stowmap/main/appcast.xml</string>
+	<key>SUPublicEDKey</key>
+	<string>FIcxRI4t8yrW/dEX2VGie0bt7fzYGqvlZuUQj4PHeYw=</string>
+	<key>SUScheduledCheckInterval</key>
+	<integer>86400</integer>
+</dict>
+</plist>
