@@ -235,7 +235,7 @@ struct DuplicatesView: View {
     @State private var expanded = Set<String>()
 
     private let sizes: [(label: String, mb: Int)] = [
-        ("1 MB and up", 1), ("10 MB and up", 10), ("100 MB and up", 100), ("1 GB and up", 1000),
+        ("1 MB and up", 1), ("10 MB and up", 10), ("100 MB and up", 100), ("1 GB and up", 1000), ("10 GB and up", 10000),
     ]
 
     private var subtitle: String {
@@ -246,6 +246,7 @@ struct DuplicatesView: View {
                 : "Find identical files within \(model.dupScopeName)."
         case .running: return model.dupProgress.stage.isEmpty ? "Starting…" : model.dupProgress.stage + "…"
         case .done:
+            if model.isVerifying { return "Verifying copies, reading each one in full.  \(Fmt.pct(model.verifyOverall))" }
             let wasted = model.dupGroups.reduce(Int64(0)) { $0 + $1.wasted }
             if model.dupGroups.isEmpty {
                 return model.dupScope == nil
@@ -294,7 +295,8 @@ struct DuplicatesView: View {
                     .buttonStyle(GlowButtonStyle())
                 }
             }
-            ToolProgressBar(fraction: model.dupProgress.fraction, active: model.dupPhase == .running)
+            ToolProgressBar(fraction: model.dupPhase == .running ? model.dupProgress.fraction : model.verifyOverall,
+                            active: model.dupPhase == .running || model.isVerifying)
             ScanBasis(only: model.dupScope)
 
             Group {
@@ -352,6 +354,9 @@ struct DuplicatesView: View {
             VStack(spacing: 10) {
                 Text(Fmt.pct(p.fraction))
                     .font(.system(size: 40, weight: .bold, design: .rounded)).monospacedDigit()
+                MeterBar(fraction: p.fraction, color: Theme.cyan, height: 8)
+                    .frame(maxWidth: 420)
+                    .animation(.easeOut(duration: 0.2), value: p.fraction)
                 Text(p.stage.isEmpty ? "Starting…" : p.stage)
                     .font(.system(size: 14, weight: .semibold))
                 Text(p.total > 0
@@ -409,6 +414,12 @@ private struct FolderMatchView: View {
         return (done, match.groupIDs.count)
     }
 
+    private var differing: Int {
+        var n = 0
+        for gid in match.groupIDs where model.dupGroup(gid)?.state == .different { n += 1 }
+        return n
+    }
+
     var body: some View {
         let v = verified
         VStack(alignment: .leading, spacing: 0) {
@@ -432,12 +443,30 @@ private struct FolderMatchView: View {
                     Text("\(Fmt.count(match.fileCount)) file\(match.fileCount == 1 ? "" : "s")  ·  \(Fmt.bytes(match.bytes)) per copy")
                         .font(.system(size: 11, design: .rounded)).monospacedDigit()
                         .foregroundStyle(Theme.textSecondary)
-                    if v.done == v.total {
+                    if let f = model.verifyFractions[match.id] {
+                        VStack(alignment: .trailing, spacing: 4) {
+                            MeterBar(fraction: f, color: Theme.cyan, height: 6)
+                                .frame(width: 170)
+                                .animation(.easeOut(duration: 0.2), value: f)
+                            HStack(spacing: 8) {
+                                Text(f <= 0 ? "Waiting to verify" : "Verifying  \(Fmt.pct(f))")
+                                    .font(.system(size: 11, weight: .semibold, design: .rounded)).monospacedDigit()
+                                    .foregroundStyle(Theme.cyan)
+                                Button("Stop") { model.cancelVerify(match.id) }
+                                    .buttonStyle(QuietButtonStyle())
+                            }
+                        }
+                    } else if v.done == v.total {
                         Pill(text: "Verified identical", color: Theme.good)
                     } else {
-                        Button(v.done == 0 ? "Verify" : "Verify (\(v.done) of \(v.total) done)") { model.verifyMatch(match) }
-                            .buttonStyle(QuietButtonStyle())
-                            .help("Read every copy in these folders from start to end and compare them")
+                        if differing > 0 {
+                            Pill(text: "\(differing) not identical", color: Theme.bad)
+                        }
+                        Button(v.done == 0 ? "Verify" : "Verify the rest (\(v.done) of \(v.total) done)") {
+                            model.verifyMatch(match)
+                        }
+                        .buttonStyle(QuietButtonStyle())
+                        .help("Read every copy in these folders from start to end and compare them")
                     }
                 }
             }

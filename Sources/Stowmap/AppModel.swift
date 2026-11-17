@@ -383,6 +383,12 @@ final class AppModel: ObservableObject {
     @Published private(set) var dupMatches: [FolderMatch] = []
     @Published private(set) var dupProgress = DupProgress()
     @Published private(set) var dupVerifying = Set<Int>()
+    /// Verify jobs that are queued or running: key → how far along (0…1).
+    @Published private(set) var verifyFractions: [String: Double] = [:]
+    @Published private(set) var verifyOverall: Double = 0
+    private var verifyJobs: [VerifyJob] = []
+    private var verifyTimer: Timer?
+    private let verifyQueue = DispatchQueue(label: "com.midjulymedia.stowmap.verify", qos: .utility)
     @Published var toolError: String?
     /// nil = every scanned drive; otherwise the one drive to look within.
     @Published private(set) var dupScope: String?
@@ -603,26 +609,82 @@ final class AppModel: ObservableObject {
         dupPhase = cancelled ? .idle : .done
     }
 
-    /// Reads every copy in a group from start to end and compares them.
-    func verifyGroup(_ id: Int) {
-        guard let g = dupGroups.first(where: { $0.id == id }), !dupVerifying.contains(id) else { return }
-        dupVerifying.insert(id)
-        let paths = g.items.map(\.path)
-        DispatchQueue.global(qos: .utility).async { [weak self] in
-            let same = DuplicateFinder.identical(paths)
-            Task { @MainActor in self?.finishVerify(id, same) }
+    // MARK: verification (full read, one job at a time so a network share isn't flooded)
+
+    private func startVerify(key: String, groupIDs: [Int]) {
+        guard verifyFractions[key] == nil else { return }
+        var items: [VerifyJob.Item] = []
+        var bytes: Int64 = 0
+        for gid in groupIDs {
+            guard let g = dupGroup(gid), g.state == .sampled || g.state == .unreadable,
+                  !dupVerifying.contains(gid) else { continue }
+            items.append(VerifyJob.Item(groupID: gid, paths: g.items.map(\.path)))
+            bytes += g.size * Int64(g.items.count)
+            dupVerifying.insert(gid)
+        }
+        guard !items.isEmpty else { return }
+        let job = VerifyJob(key: key, items: items, totalBytes: bytes)
+        verifyJobs.append(job)
+        verifyFractions[key] = 0
+        if verifyTimer == nil {
+            verifyTimer = Timer.scheduledTimer(withTimeInterval: 0.2, repeats: true) { [weak self] _ in
+                Task { @MainActor in self?.pollVerify() }
+            }
+        }
+        verifyQueue.async { [weak self] in
+            for item in job.items {
+                if job.isCancelled { break }
+                let same = DuplicateFinder.identical(item.paths, job: job)
+                let stopped = job.isCancelled
+                Task { @MainActor in self?.finishVerify(item.groupID, same, stopped: stopped) }
+            }
+            Task { @MainActor in self?.finishJob(job) }
         }
     }
 
-    private func finishVerify(_ id: Int, _ same: Bool?) {
+    private func pollVerify() {
+        var done: Int64 = 0, total: Int64 = 0
+        for job in verifyJobs {
+            verifyFractions[job.key] = job.progress.fraction
+            let c = job.progress.counts
+            done += c.done
+            total += c.total
+        }
+        verifyOverall = total > 0 ? Double(done) / Double(total) : 0
+    }
+
+    private func finishVerify(_ id: Int, _ same: Bool?, stopped: Bool) {
         dupVerifying.remove(id)
-        guard let i = dupGroups.firstIndex(where: { $0.id == id }) else { return }
+        guard !stopped, let i = dupGroups.firstIndex(where: { $0.id == id }) else { return }
         switch same {
         case .some(true): dupGroups[i].state = .identical
         case .some(false): dupGroups[i].state = .different
         case .none: dupGroups[i].state = .unreadable
         }
     }
+
+    private func finishJob(_ job: VerifyJob) {
+        for item in job.items { dupVerifying.remove(item.groupID) }
+        verifyJobs.removeAll { $0 === job }
+        verifyFractions[job.key] = nil
+        if verifyJobs.isEmpty {
+            verifyTimer?.invalidate()
+            verifyTimer = nil
+            verifyOverall = 0
+        }
+    }
+
+    /// Reads every copy in one set from start to end and compares them.
+    func verifyGroup(_ id: Int) { startVerify(key: "group-\(id)", groupIDs: [id]) }
+
+    /// Reads every copy in a folder match from start to end.
+    func verifyMatch(_ match: FolderMatch) { startVerify(key: match.id, groupIDs: match.groupIDs) }
+
+    func cancelVerify(_ key: String) {
+        verifyJobs.first { $0.key == key }?.cancel()
+    }
+
+    var isVerifying: Bool { !verifyJobs.isEmpty }
 
     func dupGroup(_ id: Int) -> DupGroup? {
         // Group ids are their positions until a trash pass removes some; fall back to a search.
@@ -656,12 +718,6 @@ final class AppModel: ObservableObject {
             }
         }
         return (collected, total)
-    }
-
-    func verifyMatch(_ match: FolderMatch) {
-        for gid in match.groupIDs.prefix(200) {
-            if let g = dupGroup(gid), g.state == .sampled { verifyGroup(gid) }
-        }
     }
 
     // MARK: collector, across drives

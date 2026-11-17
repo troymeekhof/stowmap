@@ -25,6 +25,31 @@ final class WorkProgress: @unchecked Sendable {
         lock.lock(); defer { lock.unlock() }
         return min(1, Double(done) / Double(total))
     }
+    var counts: (done: Int64, total: Int64) {
+        lock.lock(); defer { lock.unlock() }
+        return (min(done, total), total)
+    }
+}
+
+/// One Verify click: the sets of copies to read in full, with byte-level progress and a stop flag.
+final class VerifyJob: @unchecked Sendable {
+    struct Item {
+        let groupID: Int
+        let paths: [String]
+    }
+    let key: String                 // folder match id, or "group-N" for a single set
+    let items: [Item]
+    let progress = WorkProgress()
+    private let lock = NSLock()
+    private var stopped = false
+
+    init(key: String, items: [Item], totalBytes: Int64) {
+        self.key = key
+        self.items = items
+        progress.start(total: totalBytes)
+    }
+    func cancel() { lock.lock(); stopped = true; lock.unlock() }
+    var isCancelled: Bool { lock.lock(); defer { lock.unlock() }; return stopped }
 }
 
 // MARK: - Search
@@ -339,7 +364,7 @@ enum DuplicateFinder {
         return Fingerprint(digest: Data(hasher.finalize()), dev: st.st_dev, ino: st.st_ino)
     }
 
-    private static func fullHash(_ path: String) -> Data? {
+    private static func fullHash(_ path: String, job: VerifyJob?) -> Data? {
         let fd = open(path, O_RDONLY)
         guard fd >= 0 else { return nil }
         defer { close(fd) }
@@ -347,6 +372,7 @@ enum DuplicateFinder {
         var hasher = SHA256()
         var buf = [UInt8](repeating: 0, count: 1 << 20)
         while true {
+            if let job, job.isCancelled { return nil }
             let n = buf.withUnsafeMutableBytes { raw -> Int in
                 guard let base = raw.baseAddress else { return -1 }
                 return read(fd, base, raw.count)
@@ -354,16 +380,17 @@ enum DuplicateFinder {
             if n < 0 { return nil }
             if n == 0 { break }
             hasher.update(data: buf[0..<n])
+            job?.progress.add(Int64(n))
         }
         return Data(hasher.finalize())
     }
 
     /// Reads every file from start to end. true = byte-for-byte identical, false = at least one
-    /// differs, nil = one couldn't be read.
-    static func identical(_ paths: [String]) -> Bool? {
+    /// differs, nil = one couldn't be read (or the job was stopped).
+    static func identical(_ paths: [String], job: VerifyJob? = nil) -> Bool? {
         var first: Data?
         for p in paths {
-            guard let h = fullHash(p) else { return nil }
+            guard let h = fullHash(p, job: job) else { return nil }
             if let f = first {
                 if f != h { return false }
             } else {
