@@ -487,6 +487,10 @@ final class AppModel: ObservableObject {
     /// Time-left text for each verify job that is under way.
     @Published private(set) var verifyETAs: [String: String] = [:]
     private var verifyStarted: [String: Date] = [:]
+    /// A note for a verify job that is reading well under what its slowest drive usually manages.
+    @Published private(set) var verifyNotes: [String: String] = [:]
+    private var verifyExpected: [String: (name: String, cls: DeviceClass, avgFile: Int64)] = [:]
+    private var verifyMarks: [String: (date: Date, bytes: Int64)] = [:]
     /// Leave macOS and app files out of the duplicate check. On by default.
     @Published private(set) var dupSkipSystem: Bool = UserDefaults.standard.object(forKey: "dupSkipSystem") as? Bool ?? true
     /// Folders the user chose to leave out of the duplicate check.
@@ -818,6 +822,21 @@ final class AppModel: ObservableObject {
         guard !items.isEmpty else { return }
         let job = VerifyJob(key: key, items: items, totalBytes: bytes)
         verifyJobs.append(job)
+        // Work out, off the main thread, what the slowest drive involved should manage.
+        let samplePaths = Array(Set(items.flatMap { $0.paths }.map { ($0 as NSString).deletingLastPathComponent })).prefix(12)
+        let avgFile = bytes / Int64(max(1, items.reduce(0) { $0 + $1.paths.count }))
+        DispatchQueue.global(qos: .utility).async { [weak self] in
+            var slowest: (name: String, cls: DeviceClass)?
+            for p in samplePaths {
+                guard let c = Hardware.expected(forPath: p) else { continue }
+                if slowest == nil || c.mbps < slowest!.cls.mbps {
+                    let vol = (try? URL(fileURLWithPath: p).resourceValues(forKeys: [.volumeNameKey]))?.volumeName ?? "The drive"
+                    slowest = (vol, c)
+                }
+            }
+            guard let found = slowest else { return }
+            Task { @MainActor in self?.verifyExpected[key] = (found.name, found.cls, avgFile) }
+        }
         verifyFractions[key] = 0
         if verifyTimer == nil {
             verifyTimer = Timer.scheduledTimer(withTimeInterval: 0.2, repeats: true) { [weak self] _ in
@@ -845,6 +864,21 @@ final class AppModel: ObservableObject {
             let c = job.progress.counts
             done += c.done
             total += c.total
+            // Every 20 seconds, compare the read rate with what that drive usually manages.
+            let now = Date()
+            if let mark = verifyMarks[job.key] {
+                let dt = now.timeIntervalSince(mark.date)
+                if dt >= 20 {
+                    let mbps = Double(c.done - mark.bytes) / dt / 1_000_000
+                    if let e = verifyExpected[job.key] {
+                        verifyNotes[job.key] = Pace.transferNote(name: e.name, verb: "reading", mbps: mbps,
+                                                                 expected: e.cls, averageFileBytes: e.avgFile)
+                    }
+                    verifyMarks[job.key] = (now, c.done)
+                }
+            } else if c.done > 0 {
+                verifyMarks[job.key] = (now, c.done)
+            }
         }
         verifyOverall = total > 0 ? Double(done) / Double(total) : 0
     }
@@ -864,6 +898,9 @@ final class AppModel: ObservableObject {
         verifyJobs.removeAll { $0 === job }
         verifyFractions[job.key] = nil
         verifyETAs[job.key] = nil
+        verifyNotes[job.key] = nil
+        verifyExpected[job.key] = nil
+        verifyMarks[job.key] = nil
         verifyStarted[job.key] = nil
         if verifyJobs.isEmpty {
             verifyTimer?.invalidate()

@@ -482,6 +482,11 @@ private struct FolderMatchView: View {
                                 Button("Stop") { model.cancelVerify(match.id) }
                                     .buttonStyle(QuietButtonStyle())
                             }
+                            if let note = model.verifyNotes[match.id] {
+                                Text(note).font(.system(size: 10.5)).foregroundStyle(Theme.amber)
+                                    .multilineTextAlignment(.trailing).frame(width: 260, alignment: .trailing)
+                                    .fixedSize(horizontal: false, vertical: true)
+                            }
                         }
                     } else if v.done == v.total {
                         Pill(text: "Verified identical", color: Theme.good)
