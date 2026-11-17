@@ -473,7 +473,11 @@ struct DetailView: View {
     private func subtitle(_ v: Volume) -> String {
         var parts = [v.kindLabel]
         if !v.format.isEmpty { parts.append(v.format) }
-        if v.total > 0 {
+        if v.kind == .network && v.total > 0 {
+            // These numbers describe the whole server, not this share.
+            parts.append("Server: \(Fmt.bytes(v.used)) used of \(Fmt.bytes(v.total))")
+            parts.append("\(Fmt.bytes(v.free)) free")
+        } else if v.total > 0 {
             parts.append("\(Fmt.bytes(v.used)) used of \(Fmt.bytes(v.total))")
             parts.append("\(Fmt.bytes(v.free)) free")
         } else {

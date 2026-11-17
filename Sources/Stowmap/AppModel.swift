@@ -133,6 +133,7 @@ final class ScanSession: ObservableObject, Identifiable {
         result = r
         focus = r.root
         phase = .done
+        if volume.kind == .network { stripStandIns() }
         onResultChanged?()
     }
 
@@ -194,7 +195,7 @@ final class ScanSession: ObservableObject, Identifiable {
             return
         }
         let r = scanned
-        if volume.poolKey == nil { addHiddenSpace(to: r.root) }
+        if volume.kind != .network { addHiddenSpace(to: r.root) }
         result = r
         focus = r.root
         phase = .done
@@ -211,8 +212,7 @@ final class ScanSession: ObservableObject, Identifiable {
         let reallyUsed = volume.total - volume.realFree
         let gap = reallyUsed - root.size
         guard gap > max(500_000_000, volume.total / 200) else { return }
-        let node = FileNode(name: volume.kind == .network ? "Elsewhere on this server" : "Hidden space",
-                            kind: .hiddenSpace, size: gap)
+        let node = FileNode(name: "Hidden space", kind: .hiddenSpace, size: gap)
         node.parent = root
         root.children.append(node)
         root.children.sort { $0.size > $1.size }
@@ -225,36 +225,17 @@ final class ScanSession: ObservableObject, Identifiable {
         return root.children.reduce(Int64(0)) { $0 + ($1.kind == .hiddenSpace ? 0 : $1.size) }
     }
 
-    /// A server reports the used space of its whole storage pool, so a share's total is bigger than
-    /// its own files. Explain the difference: one entry per sibling share that has been scanned
-    /// (named, with its real size), and one "Elsewhere on this server" entry for the remainder.
-    func applyServerGap(siblings: [(id: String, name: String, bytes: Int64)]) {
-        guard let root = result?.root, volume.total > 0 else { return }
-        let focusWasStandIn = focus?.kind == .hiddenSpace
+    /// A network share's map shows only what is inside that share. The server reports its whole
+    /// storage pool as "used", but other shares and the server's own data don't belong on this map,
+    /// so any stand-in entries (including ones saved by earlier versions) are removed.
+    func stripStandIns() {
+        guard let root = result?.root, root.children.contains(where: { $0.kind == .hiddenSpace }) else { return }
+        if focus?.kind == .hiddenSpace { focus = root }
         root.children.removeAll { $0.kind == .hiddenSpace }
-        var own: Int64 = 0
-        for c in root.children { own += c.size }
-        var gap = (volume.total - volume.realFree) - own
-        let floor = max(500_000_000, volume.total / 200)
-
-        for sib in siblings.sorted(by: { $0.bytes > $1.bytes }) where sib.bytes > 0 && gap > 0 {
-            let size = min(sib.bytes, gap)
-            let node = FileNode(name: sib.name, kind: .hiddenSpace, size: size)
-            node.linkedVolumeID = sib.id
-            node.parent = root
-            root.children.append(node)
-            gap -= size
-        }
-        if gap > floor {
-            let node = FileNode(name: "Elsewhere on this server", kind: .hiddenSpace, size: gap)
-            node.parent = root
-            root.children.append(node)
-        }
         var total: Int64 = 0
         for c in root.children { total += c.size }
         root.size = total
         root.children.sort { $0.size > $1.size }
-        if focusWasStandIn { focus = root }
         revision += 1
     }
 
@@ -513,16 +494,11 @@ final class AppModel: ObservableObject {
         for s in sessions.values where s.isScanning { s.cancel() }
     }
 
-    /// Recomputes the "what else is on this server" entries for every scanned share on one pool.
+    /// Keeps every network share's map to its own contents.
     private func rebalancePool(of volume: Volume) {
-        guard let key = volume.poolKey else { return }
-        let group = sessions.values.filter { $0.volume.poolKey == key }
-        for s in group where s.result != nil && !s.isScanning {
-            let siblings = group.compactMap { other -> (id: String, name: String, bytes: Int64)? in
-                guard other !== s, let bytes = other.ownScannedBytes else { return nil }
-                return (other.volume.id, other.volume.name, bytes)
-            }
-            s.applyServerGap(siblings: siblings)
+        guard volume.kind == .network else { return }
+        for s in sessions.values where s.volume.kind == .network && s.result != nil && !s.isScanning {
+            s.stripStandIns()
         }
     }
 
