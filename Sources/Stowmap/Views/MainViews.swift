@@ -194,8 +194,8 @@ struct Sidebar: View {
                         .foregroundStyle(model.pane == .duplicates ? Color.white : Theme.textSecondary)
                     Text("Duplicates").font(.system(size: 12.5, weight: .semibold))
                     Spacer(minLength: 0)
-                    if !model.dupGroups.isEmpty {
-                        Text(Fmt.count(model.dupGroups.count)).font(.system(size: 10.5, weight: .semibold, design: .rounded))
+                    if !model.dupMatches.isEmpty {
+                        Text(Fmt.count(model.dupMatches.count)).font(.system(size: 10.5, weight: .semibold, design: .rounded))
                             .monospacedDigit().foregroundStyle(Theme.textSecondary)
                     }
                 }

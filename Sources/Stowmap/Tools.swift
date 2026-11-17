@@ -109,6 +109,26 @@ struct DupGroup: Identifiable, @unchecked Sendable {
     var driveCount: Int { Set(items.map(\.volumeID)).count }
 }
 
+/// One folder taking part in a match.
+struct FolderLoc: Hashable, @unchecked Sendable {
+    let volumeID: String
+    let volumeName: String
+    let path: String
+    var name: String { (path as NSString).lastPathComponent }
+}
+
+/// Folders that hold copies of the same files, with the sets of copies found inside them.
+/// "Proj on the SSD" and "Proj on the NAS" become one row instead of hundreds of file rows.
+struct FolderMatch: Identifiable, @unchecked Sendable {
+    let id: String
+    let locations: [FolderLoc]
+    var groupIDs: [Int]
+    var side: [ObjectIdentifier: Int]      // which location each copy sits under
+    var bytes: Int64                       // size of one full set of the files
+    var wasted: Int64
+    var fileCount: Int { groupIDs.count }
+}
+
 struct DupProgress {
     var stage = ""
     var checked = 0
@@ -228,6 +248,55 @@ enum DuplicateFinder {
         groups.sort { $0.wasted > $1.wasted }
         if groups.count > 1000 { groups.removeLast(groups.count - 1000) }
         return groups.enumerated().map { i, g in DupGroup(id: i, size: g.size, items: g.items) }
+    }
+
+    /// Rolls file-level sets up into the folders that contain them. Two folders whose files are
+    /// copies of each other are lifted to the highest pair of same-named ancestors, so a whole
+    /// duplicated project tree is one entry.
+    static func folderMatches(_ groups: [DupGroup], rootPaths: [String: String]) -> [FolderMatch] {
+        var byKey: [String: FolderMatch] = [:]
+        for g in groups {
+            var seen = Set<FolderLoc>()
+            var folders: [FolderLoc] = []
+            for item in g.items {
+                let loc = FolderLoc(volumeID: item.volumeID, volumeName: item.volumeName, path: item.folder)
+                if seen.insert(loc).inserted { folders.append(loc) }
+            }
+            let lifted = lift(folders, rootPaths: rootPaths).sorted { ($0.volumeName, $0.path) < ($1.volumeName, $1.path) }
+            let key = lifted.map { $0.volumeID + "\u{1}" + $0.path }.joined(separator: "\u{2}")
+            var match = byKey[key] ?? FolderMatch(id: key, locations: lifted, groupIDs: [], side: [:], bytes: 0, wasted: 0)
+            match.groupIDs.append(g.id)
+            match.bytes += g.size
+            match.wasted += g.wasted
+            for item in g.items {
+                let idx = lifted.firstIndex { loc in
+                    loc.volumeID == item.volumeID && (item.folder == loc.path || item.folder.hasPrefix(loc.path.hasSuffix("/") ? loc.path : loc.path + "/"))
+                }
+                match.side[item.id] = idx ?? 0
+            }
+            byKey[key] = match
+        }
+        return byKey.values.sorted { $0.wasted > $1.wasted }
+    }
+
+    /// Walks a set of folders up together while they share a name at every step.
+    private static func lift(_ folders: [FolderLoc], rootPaths: [String: String]) -> [FolderLoc] {
+        guard folders.count > 1 else { return folders }
+        var cur = folders
+        guard Set(cur.map(\.name)).count == 1 else { return cur }
+        while true {
+            var parents: [FolderLoc] = []
+            for f in cur {
+                if f.path == rootPaths[f.volumeID] || f.path == "/" { return cur }
+                let parent = (f.path as NSString).deletingLastPathComponent
+                if parent.isEmpty || parent == f.path { return cur }
+                parents.append(FolderLoc(volumeID: f.volumeID, volumeName: f.volumeName, path: parent))
+            }
+            // Stop where the names diverge, where two sides would merge, or at a drive's top level.
+            guard Set(parents.map(\.name)).count == 1, Set(parents).count == parents.count else { return cur }
+            if parents.contains(where: { $0.path == rootPaths[$0.volumeID] }) { return cur }
+            cur = parents
+        }
     }
 
     private static func statLength(_ path: String) -> Int64 {

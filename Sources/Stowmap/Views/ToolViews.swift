@@ -232,6 +232,7 @@ struct SearchView: View {
 struct DuplicatesView: View {
     @EnvironmentObject var model: AppModel
     @AppStorage("dupMinMB") private var minMB = 10
+    @State private var expanded = Set<String>()
 
     private let sizes: [(label: String, mb: Int)] = [
         ("1 MB and up", 1), ("10 MB and up", 10), ("100 MB and up", 100), ("1 GB and up", 1000),
@@ -251,7 +252,7 @@ struct DuplicatesView: View {
                     ? "No duplicates of that size on the scanned drives."
                     : "No duplicates of that size within \(model.dupScopeName)."
             }
-            return "\(Fmt.count(model.dupGroups.count)) sets of copies. Keeping one of each would free \(Fmt.bytes(wasted))."
+            return "\(Fmt.count(model.dupMatches.count)) folder match\(model.dupMatches.count == 1 ? "" : "es"), \(Fmt.count(model.dupGroups.count)) duplicated files. Keeping one copy of each would free \(Fmt.bytes(wasted))."
         }
     }
 
@@ -367,11 +368,15 @@ struct DuplicatesView: View {
     private var results: some View {
         Card(padding: 8) {
             ScrollView {
-                LazyVStack(alignment: .leading, spacing: 10) {
-                    ForEach(model.dupGroups) { group in
-                        DupGroupView(group: group)
+                LazyVStack(alignment: .leading, spacing: 8) {
+                    ForEach(model.dupMatches) { match in
+                        FolderMatchView(match: match, expanded: expanded.contains(match.id)) {
+                            withAnimation(.easeOut(duration: 0.18)) {
+                                if expanded.contains(match.id) { expanded.remove(match.id) } else { expanded.insert(match.id) }
+                            }
+                        }
                     }
-                    if model.dupGroups.isEmpty {
+                    if model.dupMatches.isEmpty {
                         Text("Nothing to show. Try a smaller minimum size, or scan more drives.")
                             .font(.system(size: 12.5)).foregroundStyle(Theme.textSecondary)
                             .frame(maxWidth: .infinity).padding(.vertical, 40)
@@ -379,6 +384,111 @@ struct DuplicatesView: View {
                 }
                 .padding(.vertical, 4)
             }
+        }
+    }
+}
+
+/// One row per set of folders that hold copies of the same files. Opens to show the files.
+private struct FolderMatchView: View {
+    @EnvironmentObject var model: AppModel
+    var match: FolderMatch
+    var expanded: Bool
+    var toggle: () -> Void
+    @State private var hover = false
+
+    private var title: String {
+        if match.locations.count == 1 { return "Copies inside \(match.locations[0].name)" }
+        let names = Set(match.locations.map(\.name))
+        if names.count == 1, let n = names.first { return n }
+        return match.locations.map(\.name).joined(separator: "  ↔  ")
+    }
+
+    private var verified: (done: Int, total: Int) {
+        var done = 0
+        for gid in match.groupIDs where model.dupGroup(gid)?.state == .identical { done += 1 }
+        return (done, match.groupIDs.count)
+    }
+
+    var body: some View {
+        let v = verified
+        VStack(alignment: .leading, spacing: 0) {
+            HStack(alignment: .top, spacing: 10) {
+                Image(systemName: "chevron.right").font(.system(size: 10, weight: .bold))
+                    .foregroundStyle(Theme.textSecondary)
+                    .rotationEffect(.degrees(expanded ? 90 : 0))
+                    .frame(width: 12).padding(.top, 4)
+                Image(systemName: "folder.fill").font(.system(size: 14)).foregroundStyle(Theme.blue)
+                    .frame(width: 18).padding(.top, 1)
+                VStack(alignment: .leading, spacing: 5) {
+                    Text(title).font(.system(size: 13, weight: .semibold)).lineLimit(1).truncationMode(.middle)
+                    ForEach(Array(match.locations.enumerated()), id: \.offset) { i, loc in
+                        SideRow(match: match, side: i, loc: loc)
+                    }
+                }
+                Spacer(minLength: 8)
+                VStack(alignment: .trailing, spacing: 4) {
+                    Text("\(Fmt.bytes(match.wasted)) to free")
+                        .font(.system(size: 12.5, weight: .semibold, design: .rounded)).monospacedDigit()
+                    Text("\(Fmt.count(match.fileCount)) file\(match.fileCount == 1 ? "" : "s")  ·  \(Fmt.bytes(match.bytes)) per copy")
+                        .font(.system(size: 11, design: .rounded)).monospacedDigit()
+                        .foregroundStyle(Theme.textSecondary)
+                    if v.done == v.total {
+                        Pill(text: "Verified identical", color: Theme.good)
+                    } else {
+                        Button(v.done == 0 ? "Verify" : "Verify (\(v.done) of \(v.total) done)") { model.verifyMatch(match) }
+                            .buttonStyle(QuietButtonStyle())
+                            .help("Read every copy in these folders from start to end and compare them")
+                    }
+                }
+            }
+            .padding(.horizontal, 10).padding(.vertical, 9)
+            .contentShape(Rectangle())
+            .onTapGesture(perform: toggle)
+
+            if expanded {
+                VStack(alignment: .leading, spacing: 6) {
+                    ForEach(match.groupIDs.prefix(150), id: \.self) { gid in
+                        if let g = model.dupGroup(gid) { DupGroupView(group: g) }
+                    }
+                    if match.groupIDs.count > 150 {
+                        Text("…and \(Fmt.count(match.groupIDs.count - 150)) more files in these folders")
+                            .font(.system(size: 11)).foregroundStyle(Theme.textTertiary).padding(.horizontal, 10)
+                    }
+                }
+                .padding(.leading, 30).padding(.trailing, 6).padding(.bottom, 8)
+            }
+        }
+        .background(RoundedRectangle(cornerRadius: 12, style: .continuous)
+            .fill(Color.white.opacity(hover || expanded ? 0.06 : 0.03)))
+        .onHover { hover = $0 }
+    }
+}
+
+/// One folder in a match: where it is, and a button to collect every copy under it.
+private struct SideRow: View {
+    @EnvironmentObject var model: AppModel
+    var match: FolderMatch
+    var side: Int
+    var loc: FolderLoc
+
+    var body: some View {
+        let c = model.sideCollected(match, side: side)
+        HStack(spacing: 6) {
+            DriveBadge(name: loc.volumeName)
+            Text(loc.path).font(.system(size: 10.5)).foregroundStyle(Theme.textSecondary)
+                .lineLimit(1).truncationMode(.head)
+            if c.collected > 0 {
+                Text("\(c.collected) of \(c.total) collected").font(.system(size: 9.5, weight: .semibold))
+                    .foregroundStyle(Theme.amber)
+            }
+            IconButton(symbol: "tray.and.arrow.down",
+                       help: "Add the copies in this folder to the Collector. The copies in the other folder stay.") {
+                withAnimation(.spring(response: 0.3, dampingFraction: 0.8)) { model.collectSide(match, side: side) }
+            }
+            IconButton(symbol: "chart.pie", help: "Show this folder on the map") {
+                model.showOnMap(volumeID: loc.volumeID, folderPath: loc.path)
+            }
+            IconButton(symbol: "folder", help: "Open in Finder") { Finder.open(loc.path) }
         }
     }
 }

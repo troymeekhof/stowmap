@@ -372,7 +372,15 @@ final class AppModel: ObservableObject {
     // Duplicates across every scanned drive
     enum DupPhase { case idle, running, done }
     @Published private(set) var dupPhase: DupPhase = .idle
-    @Published private(set) var dupGroups: [DupGroup] = []
+    @Published private(set) var dupGroups: [DupGroup] = [] {
+        didSet {
+            var roots: [String: String] = [:]
+            for (id, session) in sessions { roots[id] = session.volume.path }
+            dupMatches = DuplicateFinder.folderMatches(dupGroups, rootPaths: roots)
+        }
+    }
+    /// The same results, rolled up into the folders that hold the copies.
+    @Published private(set) var dupMatches: [FolderMatch] = []
     @Published private(set) var dupProgress = DupProgress()
     @Published private(set) var dupVerifying = Set<Int>()
     @Published var toolError: String?
@@ -613,6 +621,46 @@ final class AppModel: ObservableObject {
         case .some(true): dupGroups[i].state = .identical
         case .some(false): dupGroups[i].state = .different
         case .none: dupGroups[i].state = .unreadable
+        }
+    }
+
+    func dupGroup(_ id: Int) -> DupGroup? {
+        // Group ids are their positions until a trash pass removes some; fall back to a search.
+        if id < dupGroups.count, dupGroups[id].id == id { return dupGroups[id] }
+        return dupGroups.first { $0.id == id }
+    }
+
+    /// Adds every copy that sits under one side of a folder match to the Collector, always
+    /// leaving at least one copy of each file somewhere.
+    func collectSide(_ match: FolderMatch, side: Int) {
+        for gid in match.groupIDs {
+            guard let g = dupGroup(gid), g.state != .different else { continue }
+            var remaining = g.items.filter { !isCollected($0.node, in: $0.volumeID) }.count
+            for item in g.items where match.side[item.id] == side && remaining > 1 {
+                guard let session = sessions[item.volumeID], !session.isCollected(item.node) else { continue }
+                session.toggleCollect(item.node)
+                if session.isCollected(item.node) { remaining -= 1 }
+            }
+        }
+        objectWillChange.send()
+    }
+
+    /// How many copies under one side of a match are in the Collector.
+    func sideCollected(_ match: FolderMatch, side: Int) -> (collected: Int, total: Int) {
+        var collected = 0, total = 0
+        for gid in match.groupIDs {
+            guard let g = dupGroup(gid) else { continue }
+            for item in g.items where match.side[item.id] == side {
+                total += 1
+                if isCollected(item.node, in: item.volumeID) { collected += 1 }
+            }
+        }
+        return (collected, total)
+    }
+
+    func verifyMatch(_ match: FolderMatch) {
+        for gid in match.groupIDs.prefix(200) {
+            if let g = dupGroup(gid), g.state == .sampled { verifyGroup(gid) }
         }
     }
 
