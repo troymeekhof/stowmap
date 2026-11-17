@@ -193,7 +193,10 @@ final class ScanSession: ObservableObject, Identifiable {
         let reallyUsed = volume.total - volume.realFree
         let gap = reallyUsed - root.size
         guard gap > max(500_000_000, volume.total / 200) else { return }
-        let node = FileNode(name: "Hidden space", kind: .hiddenSpace, size: gap)
+        // On a network share the server reports the whole storage pool, so the gap is mostly
+        // other shares, plus the server's snapshots and recycle bins.
+        let label = volume.kind == .network ? "Elsewhere on this server" : "Hidden space"
+        let node = FileNode(name: label, kind: .hiddenSpace, size: gap)
         node.parent = root
         root.children.append(node)
         root.children.sort { $0.size > $1.size }

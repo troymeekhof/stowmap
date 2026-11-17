@@ -277,8 +277,11 @@ struct MapRow: View {
     @ViewBuilder
     private var rowActions: some View {
         if node.kind == .hiddenSpace {
-            IconButton(symbol: "questionmark", help: "Snapshots, purgeable data and protected system files that macOS counts as used but doesn't show to apps. Full Disk Access can shrink this.") {
-                Finder.openFullDiskAccessSettings()
+            let network = session.volume.kind == .network
+            IconButton(symbol: "questionmark", help: network
+                ? "Space the server counts as used that isn't in this share: other shared folders on the same storage, snapshots, recycle bins and system data. Scan the other shares to see them."
+                : "Snapshots, purgeable data and protected system files that macOS counts as used but doesn't show to apps. Full Disk Access can shrink this.") {
+                if !network { Finder.openFullDiskAccessSettings() }
             }
         } else {
             NodeActions(session: session, node: node, showCollect: hot || hover)

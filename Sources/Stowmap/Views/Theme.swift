@@ -345,7 +345,11 @@ struct NodeMenu: ViewModifier {
     func body(content: Content) -> some View {
         content.contextMenu {
             if node.kind == .hiddenSpace {
-                Button("Open Full Disk Access Settings…") { Finder.openFullDiskAccessSettings() }
+                if session.volume.kind == .network {
+                    Text("Other shares, snapshots and system data on the server")
+                } else {
+                    Button("Open Full Disk Access Settings…") { Finder.openFullDiskAccessSettings() }
+                }
             } else {
                 Button(node.kind == .file ? "Reveal in Finder" : "Open in Finder") { Finder.show(node) }
                 if node.kind == .folder {
