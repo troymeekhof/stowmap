@@ -520,7 +520,7 @@ final class AppModel: ObservableObject {
     /// Folders the user chose to leave out of the duplicate check.
     @Published private(set) var dupIgnored: [String] = UserDefaults.standard.stringArray(forKey: "dupIgnoredFolders") ?? []
     /// nil = every scanned drive; otherwise the one drive to look within.
-    @Published private(set) var dupScope: String?
+    @Published private(set) var dupExcluded: Set<String> = []   // drives unticked in the duplicates checklist
     private var dupScan: DuplicateScan?
     private var dupTimer: Timer?
 
@@ -710,11 +710,23 @@ final class AppModel: ObservableObject {
 
     // MARK: duplicates
 
-    /// Roots the duplicate check will use for the current scope.
+    /// The drives ticked in the checklist.
     func duplicateRoots() -> [TreeRoot] {
-        let all = scannedRoots()
-        guard let scope = dupScope else { return all }
-        return all.filter { $0.id == scope }
+        scannedRoots().filter { !dupExcluded.contains($0.id) }
+    }
+
+    /// The one drive being checked, when only one is ticked.
+    var dupScope: String? {
+        let roots = duplicateRoots()
+        return roots.count == 1 ? roots[0].id : nil
+    }
+
+    /// "across every drive you've scanned", "within Media", "across the 3 ticked drives".
+    var dupWhere: String {
+        let roots = duplicateRoots()
+        if roots.count == 1 { return "within \(roots[0].name)" }
+        if roots.count == scannedRoots().count { return "across every drive you've scanned" }
+        return "across the \(roots.count) ticked drives"
     }
 
     /// "about 3 min left" for the duplicate check or the verify jobs, whichever is running.
@@ -724,25 +736,23 @@ final class AppModel: ObservableObject {
     }
 
     var dupScopeName: String {
-        guard let scope = dupScope else { return "All drives" }
-        return sessions[scope]?.volume.name ?? "This drive"
+        let roots = duplicateRoots()
+        if roots.count == 1 { return roots[0].name }
+        return roots.count == scannedRoots().count ? "All drives" : "\(roots.count) drives"
     }
 
-    /// Changing where to look throws away results from the previous scope.
-    func setDupScope(_ id: String?) {
-        guard dupPhase != .running, id != dupScope else { return }
-        dupScope = id
+    /// Ticks or unticks a drive. Changing where to look throws away the previous results.
+    /// The last ticked drive stays ticked.
+    func toggleDupDrive(_ id: String) {
+        guard dupPhase != .running else { return }
+        if dupExcluded.contains(id) {
+            dupExcluded.remove(id)
+        } else {
+            guard duplicateRoots().count > 1 else { return }
+            dupExcluded.insert(id)
+        }
         dupGroups = []
         dupPhase = .idle
-    }
-
-    /// From a drive's header: look for duplicates within that one drive.
-    func openDuplicates(for volumeID: String) {
-        pane = .duplicates
-        guard dupPhase != .running else { return }
-        setDupScope(volumeID)
-        let mb = UserDefaults.standard.object(forKey: "dupMinMB") as? Int ?? 10
-        findDuplicates(minSize: Int64(mb) * 1_000_000)
     }
 
     func findDuplicates(minSize: Int64) {

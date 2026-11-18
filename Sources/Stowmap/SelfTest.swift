@@ -146,6 +146,10 @@ enum SelfTest {
         let viaBuild = TransferPlanner.build(sources: [proj], options: cmp)
         check(viaBuild.fileCount == files.count && viaBuild.totalBytes == listed.totalBytes, "copy planning and folder listing agree")
 
+        // 10c. Two paths on one drive name the same device, so jobs there take turns.
+        let keyA = Hardware.deviceKey(forPath: proj), keyB = Hardware.deviceKey(forPath: d1)
+        check(!keyA.isEmpty && keyA == keyB, "two folders on one drive count as the same device (\(keyA))")
+
         // 11. The fast folder listing used for network shares must agree with the classic one.
         func listing(_ path: String, bulk: Bool) -> [String: String]? {
             guard let dir = opendir(path) else { return nil }

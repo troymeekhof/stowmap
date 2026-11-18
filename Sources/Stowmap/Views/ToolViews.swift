@@ -40,6 +40,54 @@ struct ScanBasis: View {
     }
 }
 
+/// Which drives the duplicate check looks in: one tick box per scanned drive.
+struct DupDriveChecklist: View {
+    @EnvironmentObject var model: AppModel
+
+    var body: some View {
+        let roots = model.scannedRoots()
+        VStack(alignment: .leading, spacing: 5) {
+            if roots.isEmpty {
+                Text("No drive has been scanned yet. Scan one in Drives first.")
+                    .font(.system(size: 11)).foregroundStyle(Theme.textSecondary)
+            } else {
+                ScrollView(.horizontal, showsIndicators: false) {
+                    HStack(spacing: 6) {
+                        Text("Look in").font(.system(size: 11, weight: .semibold)).foregroundStyle(Theme.textSecondary)
+                        ForEach(roots, id: \.id) { r in chip(r) }
+                    }
+                }
+            }
+            if !model.unscannedNames.isEmpty {
+                Text("Not scanned, so not included: " + model.unscannedNames.joined(separator: ", "))
+                    .font(.system(size: 11)).foregroundStyle(Theme.textSecondary)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+        }
+    }
+
+    private func chip(_ r: TreeRoot) -> some View {
+        let on = !model.dupExcluded.contains(r.id)
+        return Button { model.toggleDupDrive(r.id) } label: {
+            HStack(spacing: 6) {
+                Image(systemName: on ? "checkmark.square.fill" : "square")
+                    .font(.system(size: 12, weight: .semibold))
+                    .foregroundStyle(on ? Theme.cyan : Theme.textSecondary)
+                Text(r.name).font(.system(size: 12, weight: .semibold))
+                    .foregroundStyle(on ? Color.white : Theme.textSecondary)
+                Text("\(r.fromCache ? "saved " : "")\(Fmt.ago(r.date))").font(.system(size: 10.5))
+                    .foregroundStyle(Theme.textTertiary)
+            }
+            .padding(.horizontal, 9).padding(.vertical, 5)
+            .background(RoundedRectangle(cornerRadius: 8, style: .continuous).fill(Color.white.opacity(on ? 0.08 : 0.03)))
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .disabled(model.dupPhase == .running)
+        .help(on ? "Untick to leave \(r.name) out of the duplicate check" : "Tick to include \(r.name)")
+    }
+}
+
 /// A file or folder shown with the drive and folder it lives in.
 struct LocatedRow: View {
     @EnvironmentObject var model: AppModel
@@ -224,7 +272,7 @@ struct SearchView: View {
 
             if model.collectedCount > 0 { SharedCollectorBar() }
         }
-        .padding(.horizontal, 22).padding(.top, 30).padding(.bottom, 18)
+        .padding(.horizontal, 22).padding(.top, 16).padding(.bottom, 18)
         .onChange(of: model.searchKind) { _ in model.runSearch() }
     }
 }
@@ -250,17 +298,13 @@ struct DuplicatesView: View {
     private var subtitle: String {
         switch model.dupPhase {
         case .idle:
-            return model.dupScope == nil
-                ? "Find identical files across every drive you've scanned."
-                : "Find identical files within \(model.dupScopeName)."
+            return "Find identical files \(model.dupWhere)."
         case .running: return model.dupProgress.stage.isEmpty ? "Starting…" : model.dupProgress.stage + "…"
         case .done:
             if model.isVerifying { return "Verifying copies, reading each one in full.  \(Fmt.pct(model.verifyOverall))" }
             let wasted = model.dupGroups.reduce(Int64(0)) { $0 + $1.wasted }
             if model.dupGroups.isEmpty {
-                return model.dupScope == nil
-                    ? "No duplicates of that size on the scanned drives."
-                    : "No duplicates of that size within \(model.dupScopeName)."
+                return "No duplicates of that size \(model.dupWhere)."
             }
             return "\(Fmt.count(model.dupMatches.count)) folder match\(model.dupMatches.count == 1 ? "" : "es"), \(Fmt.count(model.dupGroups.count)) duplicated files. Keeping one copy of each would free \(Fmt.bytes(wasted))."
         }
@@ -269,20 +313,6 @@ struct DuplicatesView: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 14) {
             ToolHeader(title: "Duplicates", subtitle: subtitle) {
-                Menu {
-                    Button("All drives") { model.setDupScope(nil) }
-                    Divider()
-                    ForEach(model.scannedRoots(), id: \.id) { r in
-                        Button("Within \(r.name)") { model.setDupScope(r.id) }
-                    }
-                } label: {
-                    Label(model.dupScope == nil ? "All drives" : "Within \(model.dupScopeName)",
-                          systemImage: model.dupScope == nil ? "externaldrive.fill.badge.checkmark" : "internaldrive")
-                        .font(.system(size: 12, weight: .semibold))
-                }
-                .menuStyle(.borderlessButton).fixedSize()
-                .disabled(model.dupPhase == .running)
-                .help("Where to look for duplicates")
                 Menu {
                     Picker("Smallest file to compare", selection: $minMB) {
                         ForEach(sizes, id: \.mb) { s in
@@ -320,7 +350,7 @@ struct DuplicatesView: View {
             }
             ToolProgressBar(fraction: model.dupPhase == .running ? model.dupProgress.fraction : model.verifyOverall,
                             active: model.dupPhase == .running || model.isVerifying)
-            ScanBasis(only: model.dupScope)
+            DupDriveChecklist()
 
             Group {
                 switch model.dupPhase {
@@ -333,7 +363,7 @@ struct DuplicatesView: View {
 
             if model.collectedCount > 0 { SharedCollectorBar() }
         }
-        .padding(.horizontal, 22).padding(.top, 30).padding(.bottom, 18)
+        .padding(.horizontal, 22).padding(.top, 16).padding(.bottom, 18)
         .alert("Some items couldn't be moved", isPresented: Binding(
             get: { model.toolError != nil }, set: { if !$0 { model.toolError = nil } })) {
             Button("OK", role: .cancel) {}

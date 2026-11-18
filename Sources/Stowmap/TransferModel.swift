@@ -39,6 +39,7 @@ struct QueueJob: Identifiable {
     var bytes: Int64 = 0                 // size of the work when known (0 = not known yet)
     var counted = true                   // part of the queue run in progress
     var options = TransferOptions()
+    var devices: Set<String> = []        // the drives and links it uses; jobs that share none can run together
 
     // Copy
     var sources: [TransferModel.SourceItem] = []
@@ -110,12 +111,339 @@ enum DockProgress {
     }
 }
 
-/// State for the Copy & Verify screen: what to copy, where, how, the queue and the running job.
+/// One job while it runs: its engine, its timer and everything its live view shows.
+@MainActor
+final class JobRun: ObservableObject {
+    enum Stage { case preparing, running, done }
+
+    let id: UUID
+    let kind: QueueJob.Kind
+    let full: Bool
+    var onProgress: (@MainActor (Double, Int64) -> Void)?
+    var onFinish: (@MainActor (QueueJob.State, String, Double, TransferSnapshot?, CompareResult?) -> Void)?
+
+    // Copy
+    @Published private(set) var stage: Stage = .preparing
+    @Published private(set) var snap = TransferSnapshot()
+    @Published private(set) var speed: Double = 0          // bytes per second, smoothed
+    @Published private(set) var history: [Double] = []     // one sample each half second (MB/s, or files/s while listing)
+    @Published private(set) var graph: [Double] = []       // the whole job so far, thinned as it grows
+    @Published private(set) var etaText: String?
+    @Published private(set) var paceNote: String?
+    @Published private(set) var destNames: [String] = []
+    @Published private(set) var destSpeeds: [Double] = []   // bytes per second written, per destination
+    @Published private(set) var listedFiles = 0            // found so far while a copy is being listed
+    @Published private(set) var runOptions = TransferOptions()
+
+    // Check a copy
+    @Published private(set) var checkFraction: Double = 0
+    @Published private(set) var checkStatus = "Listing both folders"
+    @Published private(set) var checkETA: String?
+    @Published private(set) var checkHashing = false
+    @Published private(set) var checkListed = 0
+    @Published private(set) var checkRate: Double = 0      // files per second while listing
+    @Published private(set) var checkBytesDone: Int64 = 0
+    @Published private(set) var checkBytesTotal: Int64 = 0
+    @Published private(set) var checkFilesDone = 0
+    @Published private(set) var checkFilesTotal = 0
+    @Published private(set) var checkExpected = 0          // files a saved map says to expect (0 = no map)
+    let startedAt = Date()
+
+    private var runSources: [TransferModel.SourceItem] = []
+    private var runDests: [TransferModel.DestItem] = []
+    private var lastDestCopied: [Int64] = []
+    private var listCounter = Shared(0)
+    private var prepStop = Shared(false)
+    private var engine: TransferEngine?
+    private var compare: CompareJob?
+    private var timer: Timer?
+    private var lastBytes: Int64 = 0
+    private var lastTick = Date()
+    private var lastListed = 0
+    private var graphStride = 1          // half-second samples per graph point
+    private var graphSum = 0.0
+    private var graphCount = 0
+    private var window: [(read: UInt64, write: [UInt64], copied: Int64, files: Int)] = []
+    private var expected: [String: DeviceClass] = [:]     // path → what its drive should manage
+
+    init(job: QueueJob, expectedCount: Int) {
+        id = job.id
+        kind = job.kind
+        full = job.full
+        checkExpected = expectedCount
+    }
+
+    var isPaused: Bool { snap.paused }
+    var canPause: Bool { kind == .copy }
+    /// Time left for this job, whichever kind it is.
+    var eta: String? { kind == .copy ? etaText : checkETA }
+    var fraction: Double { kind == .copy ? snap.fraction : checkFraction }
+    /// Bytes per second right now (0 while listing).
+    var liveSpeed: Double { kind == .check && !checkHashing ? 0 : speed }
+
+    func start(_ job: QueueJob) {
+        switch job.kind {
+        case .copy: run(copy: job)
+        case .check: run(check: job)
+        }
+    }
+
+    func pause() { engine?.pause(); snap.paused = true }
+    func resume() { engine?.resume(); snap.paused = false }
+    func stop() { prepStop.value = true; engine?.cancel(); compare?.cancel() }
+
+    private func startTimer() {
+        timer?.invalidate()
+        lastTick = Date()
+        lastBytes = 0
+        timer = Timer.scheduledTimer(withTimeInterval: 0.5, repeats: true) { [weak self] _ in
+            Task { @MainActor in self?.tick() }
+        }
+    }
+
+    private func tick() {
+        if kind == .check { tickCheck() } else { tickCopy() }
+    }
+
+    /// Adds a sample to the whole-job graph. When it gets long, neighbours are averaged together
+    /// so the full run always fits.
+    private func plot(_ value: Double) {
+        graphSum += value
+        graphCount += 1
+        guard graphCount >= graphStride else { return }
+        graph.append(graphSum / Double(graphCount))
+        graphSum = 0
+        graphCount = 0
+        if graph.count >= 480 {
+            var half: [Double] = []
+            half.reserveCapacity(240)
+            var i = 0
+            while i + 1 < graph.count {
+                half.append((graph[i] + graph[i + 1]) / 2)
+                i += 2
+            }
+            graph = half
+            graphStride *= 2
+        }
+    }
+
+    private func resetGraph() {
+        graph = []
+        graphStride = 1
+        graphSum = 0
+        graphCount = 0
+    }
+
+    // MARK: copy
+
+    private func run(copy job: QueueJob) {
+        let o = job.options
+        let srcs = job.sources.map(\.path)
+        let dests = job.dests.map(\.path)
+        runSources = job.sources
+        runDests = job.dests
+        runOptions = o
+        destNames = job.destNames
+        stage = .preparing
+        let counter = listCounter
+        let stopFlag = prepStop
+        startTimer()
+        // A listing less than ten minutes old is still good; older than that, look again.
+        var ready: TransferPlan?
+        if let plan = job.plan, let at = job.planAt, Date().timeIntervalSince(at) < 600 { ready = plan }
+        let prepared = ready
+        DispatchQueue.global(qos: .userInitiated).async { [weak self] in
+            let plan = prepared ?? TransferPlanner.build(sources: srcs, options: o, keepGoing: { !stopFlag.value },
+                                                         found: { n in counter.value = n })
+            var classes: [String: DeviceClass] = [:]
+            for p in srcs + dests { if let c = Hardware.expected(forPath: p) { classes[p] = c } }
+            let engine = TransferEngine(plan: plan, destinations: dests, options: o)
+            if stopFlag.value { engine.cancel() }
+            Task { @MainActor in self?.begin(engine, classes) }
+            engine.run()
+            Task { @MainActor in self?.finished(engine) }
+        }
+    }
+
+    private func begin(_ engine: TransferEngine, _ classes: [String: DeviceClass]) {
+        self.engine = engine
+        expected = classes
+        stage = .running
+        lastBytes = 0
+        lastTick = Date()
+    }
+
+    private func tickCopy() {
+        guard let engine else {
+            listedFiles = listCounter.value
+            return
+        }
+        let s = engine.snapshot()
+        let now = Date()
+        let dt = now.timeIntervalSince(lastTick)
+        let moved = s.copiedBytes + s.verifiedBytes
+        if dt > 0.2 {
+            let instant = s.paused ? 0 : Double(moved - lastBytes) / dt
+            speed = speed == 0 ? instant : speed * 0.7 + instant * 0.3
+            history.append(instant / 1_000_000)
+            if history.count > 240 { history.removeFirst(history.count - 240) }
+            if !s.paused { plot(instant / 1_000_000) }
+            if lastDestCopied.count != s.destCopied.count { lastDestCopied = Array(repeating: 0, count: s.destCopied.count) }
+            destSpeeds = s.destCopied.enumerated().map { i, c in
+                s.paused ? 0 : max(0, Double(c - lastDestCopied[i]) / dt)
+            }
+            lastDestCopied = s.destCopied
+            lastBytes = moved
+            lastTick = now
+            let left = Double((s.totalBytes + s.verifyTotal) - moved)
+            let recent = history.suffix(20)
+            let avg = recent.isEmpty ? 0 : recent.reduce(0, +) / Double(recent.count) * 1_000_000
+            etaText = (avg > 0 && !s.paused && history.count >= 6) ? ETA.text(left / avg) : nil
+            updatePace(s)
+            snap = s
+            onProgress?(s.fraction, s.totalBytes + s.verifyTotal)
+        } else {
+            snap = s
+        }
+    }
+
+    /// Looks at the last ~20 seconds: which stage took the time, and is it under what that drive should do?
+    private func updatePace(_ s: TransferSnapshot) {
+        window.append((s.readNanos, s.writeNanos, s.copiedBytes, s.filesDone))
+        if window.count > 40 { window.removeFirst(window.count - 40) }
+        guard window.count >= 30, let first = window.first, !s.paused else { paceNote = nil; return }
+        let bytes = Double(s.copiedBytes - first.copied)
+        let files = max(1, s.filesDone - first.files)
+        guard bytes > 50_000_000 else { paceNote = nil; return }
+        let avgFile = Int64(bytes) / Int64(files)
+
+        let readSecs = Double(s.readNanos - first.read) / 1e9
+        var slowest: (name: String, verb: String, secs: Double, cls: DeviceClass?) =
+            (runSources.first?.name ?? "The source", "reading", readSecs, runSources.first.flatMap { expected[$0.path] })
+        for (i, d) in runDests.enumerated() where i < s.writeNanos.count && i < first.write.count {
+            let secs = Double(s.writeNanos[i] - first.write[i]) / 1e9
+            if secs > slowest.secs {
+                slowest = (d.volumeName.isEmpty ? d.name : d.volumeName, "writing", secs, expected[d.path])
+            }
+        }
+        guard slowest.secs > 1 else { paceNote = nil; return }
+        paceNote = Pace.transferNote(name: slowest.name, verb: slowest.verb, mbps: bytes / slowest.secs / 1_000_000,
+                                     expected: slowest.cls, averageFileBytes: avgFile)
+    }
+
+    private func finished(_ engine: TransferEngine) {
+        timer?.invalidate()
+        timer = nil
+        let s = engine.snapshot()
+        snap = s
+        speed = 0
+        etaText = nil
+        paceNote = nil
+        self.engine = nil
+        stage = .done
+        let state: QueueJob.State
+        let summary: String
+        if s.phase == .stopped {
+            state = .stopped
+            summary = "Stopped at \(Fmt.pct(s.fraction))"
+        } else if s.problems.isEmpty {
+            state = .done
+            summary = runOptions.verify == .off ? "\(Fmt.count(s.good)) files copied" : "\(Fmt.count(s.good)) files verified"
+        } else {
+            state = .attention
+            summary = "\(Fmt.count(s.problems.count)) need attention"
+        }
+        onFinish?(state, summary, s.phase == .stopped ? s.fraction : 1, s, nil)
+    }
+
+    // MARK: check a copy
+
+    private func run(check job: QueueJob) {
+        let cmp = CompareJob()
+        compare = cmp
+        stage = .running
+        startTimer()
+        let a = job.original, b = job.copy, full = job.full, o = job.options
+        DispatchQueue.global(qos: .userInitiated).async { [weak self] in
+            let result = cmp.run(original: a, copy: b, full: full, options: o)
+            let cancelled = cmp.isCancelled
+            Task { @MainActor in self?.checkFinished(result, cancelled: cancelled) }
+        }
+    }
+
+    private func tickCheck() {
+        guard let cmp = compare else { return }
+        let p = cmp.progress
+        let now = Date()
+        let dt = now.timeIntervalSince(lastTick)
+        guard dt > 0.2 else { return }
+        lastTick = now
+        if !p.hashing {
+            // Listing: files found per second, and time left when a saved map says how many to expect.
+            let rate = max(0, Double(p.listed - lastListed) / dt)
+            lastListed = p.listed
+            checkRate = checkRate == 0 ? rate : checkRate * 0.7 + rate * 0.3
+            history.append(rate)
+            plot(rate)
+            checkListed = p.listed
+            var listFraction = 0.0
+            if checkExpected > 0 { listFraction = min(0.99, Double(p.listed) / Double(checkExpected)) }
+            checkFraction = full ? 0 : listFraction
+            checkStatus = "Listing both folders"
+            checkETA = checkExpected > 0 ? ETA.text(started: startedAt, fraction: listFraction) : nil
+        } else {
+            if !checkHashing {
+                // The checksum pass starts: a fresh graph, in MB/s.
+                checkHashing = true
+                history = []
+                resetGraph()
+                lastBytes = 0
+                speed = 0
+            }
+            let instant = max(0, Double(p.bytesDone - lastBytes) / dt)
+            lastBytes = p.bytesDone
+            speed = speed == 0 ? instant : speed * 0.7 + instant * 0.3
+            history.append(instant / 1_000_000)
+            plot(instant / 1_000_000)
+            checkFraction = p.fraction
+            checkStatus = "Comparing checksums"
+            checkListed = p.listed
+            checkBytesDone = p.bytesDone
+            checkBytesTotal = p.bytesTotal
+            checkFilesDone = p.filesDone
+            checkFilesTotal = p.filesTotal
+            let recent = history.suffix(20)
+            let avg = recent.isEmpty ? 0 : recent.reduce(0, +) / Double(recent.count) * 1_000_000
+            checkETA = (avg > 0 && history.count >= 6) ? ETA.text(Double(p.bytesTotal - p.bytesDone) / avg) : nil
+        }
+        if history.count > 240 { history.removeFirst(history.count - 240) }
+        onProgress?(checkFraction, p.bytesTotal)
+    }
+
+    private func checkFinished(_ result: CompareResult, cancelled: Bool) {
+        timer?.invalidate()
+        timer = nil
+        compare = nil
+        checkETA = nil
+        speed = 0
+        stage = .done
+        if cancelled {
+            onFinish?(.stopped, "Stopped", checkFraction, nil, nil)
+            return
+        }
+        let summary: String
+        if result.isComplete {
+            summary = full ? "Complete, \(Fmt.count(result.matched)) checksums match" : "Complete, \(Fmt.count(result.matched)) files"
+        } else {
+            summary = "\(Fmt.count(result.missing.count)) missing, \(Fmt.count(result.different.count)) different"
+        }
+        onFinish?(result.isComplete ? .done : .attention, summary, 1, nil, result)
+    }
+}
+
+/// State for the Copy & Verify screen: what to copy, where, how, and the queue of jobs.
 @MainActor
 final class TransferModel: ObservableObject {
-    enum Stage { case setup, preparing, running, done }
-    enum CheckStage { case setup, running, done }
-
     struct SourceItem: Identifiable, Equatable {
         let path: String
         var files = 0
@@ -135,7 +463,11 @@ final class TransferModel: ObservableObject {
         var name: String { (path as NSString).lastPathComponent }
     }
 
-    @Published var mode = 0                               // 0 copy, 1 check a copy, 2 queue
+    /// Jobs on separate hardware run together, up to this many.
+    static let maxTogether = 3
+
+    @Published var mode = 0                               // the new-job form: 0 copy, 1 check a copy
+    @Published var showQueue = true                       // the queue column
 
     // Copy: setup (the next job being put together; editable while others run)
     @Published private(set) var sources: [SourceItem] = []
@@ -150,77 +482,37 @@ final class TransferModel: ObservableObject {
     @Published var includeHidden = true
     @Published var writeLists = true
 
-    // Queue
-    @Published private(set) var queue: [QueueJob] = []
-    @Published var inspectID: UUID?                        // a finished job picked from the queue list
-    @Published private(set) var queueETA: String?
-    private var currentID: UUID?
-    private var lastFinishedID: UUID?
-    private var queueStarted: Date?
-
-    // The running copy
-    @Published private(set) var stage: Stage = .setup
-    @Published private(set) var snap = TransferSnapshot()
-    @Published private(set) var speed: Double = 0          // bytes per second, smoothed
-    @Published private(set) var history: [Double] = []     // one sample each half second (MB/s, or files/s while listing)
-    @Published private(set) var peak: Double = 0
-    @Published private(set) var etaText: String?
-    @Published private(set) var paceNote: String?
-    @Published private(set) var destNames: [String] = []
-    @Published private(set) var destSpeeds: [Double] = []   // bytes per second written, per destination
-    @Published private(set) var jobLine = ""               // "6 items to … · xxHash64 · verifying each destination"
-    @Published private(set) var listedFiles = 0            // found so far while a copy is being listed
-    @Published private(set) var runOptions = TransferOptions()
-    private var runSources: [SourceItem] = []
-    private var runDests: [DestItem] = []
-    private var lastDestCopied: [Int64] = []
-    private var listCounter = Shared(0)
-    private var prepStop = Shared(false)
-
     // Check a copy: setup
     @Published var original: String?
     @Published var copyFolder: String?
     @Published var checkFull = false
 
-    // The running check
-    @Published private(set) var checkStage: CheckStage = .setup
-    @Published private(set) var checkFraction: Double = 0
-    @Published private(set) var checkStatus = ""
-    @Published private(set) var checkETA: String?
-    @Published private(set) var checkHashing = false
-    @Published private(set) var checkListed = 0
-    @Published private(set) var checkRate: Double = 0      // files per second while listing
-    @Published private(set) var checkBytesDone: Int64 = 0
-    @Published private(set) var checkBytesTotal: Int64 = 0
-    @Published private(set) var checkFilesDone = 0
-    @Published private(set) var checkFilesTotal = 0
-    @Published private(set) var checkStartedAt = Date()
+    // Queue
+    @Published private(set) var queue: [QueueJob] = []
+    @Published private(set) var runs: [UUID: JobRun] = [:]   // the jobs running now
+    @Published var inspectID: UUID?                        // the job shown in full; nil shows the new-job form
+    @Published private(set) var queueETA: String?
+    private var lastFinishedID: UUID?
+    private var queueStarted: Date?
 
     /// How many files a folder held when it was last mapped, if a saved map covers it.
     var expectedFiles: (@MainActor (String) -> Int?)?
 
-    private var engine: TransferEngine?
-    private var timer: Timer?
-    private var lastBytes: Int64 = 0
-    private var lastTick = Date()
-    private var window: [(read: UInt64, write: [UInt64], copied: Int64, files: Int)] = []
-    private var expected: [String: DeviceClass] = [:]     // path → what its drive should manage
-    private var compare: CompareJob?
-    private var checkStarted: Date?
     private var plans: [String: (plan: TransferPlan, at: Date, hidden: Bool)] = [:]
 
-    var isBusy: Bool { stage == .preparing || stage == .running || checkStage == .running }
+    var isBusy: Bool { !runs.isEmpty }
     var busyFraction: Double { queueFraction }
 
     // MARK: queue
 
     var waitingCount: Int { queue.filter { $0.state == .waiting }.count }
+    var runningCount: Int { runs.count }
     var countedJobs: [QueueJob] { queue.filter { $0.counted } }
-    /// "2 of 5": the running job's place in this run of the queue.
-    var queuePosition: (index: Int, of: Int) {
-        let jobs = countedJobs
-        let finished = jobs.filter { $0.isFinished }.count
-        return (min(jobs.count, finished + 1), jobs.count)
+    /// Bytes per second across every running job.
+    var totalSpeed: Double { runs.values.reduce(0) { $0 + $1.liveSpeed } }
+    var lastFinishedJob: QueueJob? {
+        guard let id = lastFinishedID else { return nil }
+        return queue.first { $0.id == id }
     }
 
     /// Progress through every job in this run, weighted by size where the sizes are known.
@@ -242,25 +534,26 @@ final class TransferModel: ObservableObject {
         return total > 0 ? min(1, done / total) : 0
     }
 
-    /// The job the Queue tab shows in full: one picked from the list, else the running one, else the last finished.
+    /// The job shown in full beside the queue, if one is picked.
     var shownJob: QueueJob? {
-        if let id = inspectID, let j = queue.first(where: { $0.id == id }) { return j }
-        if let id = currentID, let j = queue.first(where: { $0.id == id }) { return j }
-        if let id = lastFinishedID, let j = queue.first(where: { $0.id == id }) { return j }
-        return nil
-    }
-
-    var runningJob: QueueJob? {
-        guard let id = currentID else { return nil }
+        guard let id = inspectID else { return nil }
         return queue.first { $0.id == id }
     }
 
-    private func update(_ id: UUID?, _ change: (inout QueueJob) -> Void) {
-        guard let id, let i = queue.firstIndex(where: { $0.id == id }) else { return }
+    private func update(_ id: UUID, _ change: (inout QueueJob) -> Void) {
+        guard let i = queue.firstIndex(where: { $0.id == id }) else { return }
         change(&queue[i])
     }
 
+    private func devices(for job: QueueJob) -> Set<String> {
+        var paths = job.sources.map(\.path) + job.dests.map(\.path)
+        if job.kind == .check { paths += [job.original, job.copy] }
+        return Set(paths.map { Hardware.deviceKey(forPath: $0) })
+    }
+
     private func enqueue(_ job: QueueJob) {
+        var job = job
+        job.devices = devices(for: job)
         let wasIdle = !isBusy
         if wasIdle {
             // A new run: jobs finished earlier no longer count toward its progress.
@@ -268,47 +561,72 @@ final class TransferModel: ObservableObject {
             inspectID = nil
         }
         queue.append(job)
-        if wasIdle { mode = 2 }
+        showQueue = true
+        if wasIdle { inspectID = job.id }
         advance()
     }
 
+    /// Starts every waiting job whose drives are free. A job never jumps ahead of an earlier one
+    /// that is waiting for the same drive.
     private func advance() {
-        guard !isBusy else { return }
-        guard let i = queue.firstIndex(where: { $0.state == .waiting }) else {
-            if queueStarted != nil {
-                queueStarted = nil
-                queueETA = nil
-                DockProgress.set(nil)
-                NSSound(named: "Glass")?.play()
-                NSApp.requestUserAttention(.informationalRequest)
+        var inUse = Set<String>()
+        for j in queue where j.state == .running { inUse.formUnion(j.devices) }
+        var held = Set<String>()
+        var active = runs.count
+        for i in queue.indices where queue[i].state == .waiting {
+            let d = queue[i].devices
+            if active < Self.maxTogether && d.isDisjoint(with: inUse) && d.isDisjoint(with: held) {
+                inUse.formUnion(d)
+                active += 1
+                start(i)
+            } else {
+                held.formUnion(d)
             }
-            return
         }
+        if runs.isEmpty, queueStarted != nil {
+            queueStarted = nil
+            queueETA = nil
+            DockProgress.set(nil)
+            NSSound(named: "Glass")?.play()
+            NSApp.requestUserAttention(.informationalRequest)
+        }
+    }
+
+    private func start(_ i: Int) {
         if queueStarted == nil { queueStarted = Date() }
         queue[i].state = .running
         queue[i].counted = true
-        currentID = queue[i].id
         let job = queue[i]
+        let id = job.id
+        var want = 0
+        if job.kind == .check, let a = expectedFiles?(job.original), let b = expectedFiles?(job.copy) { want = a + b }
+        let run = JobRun(job: job, expectedCount: want)
+        run.onProgress = { [weak self] fraction, bytes in
+            guard let self else { return }
+            self.update(id) { j in
+                j.fraction = fraction
+                if bytes > 0 { j.bytes = bytes }
+            }
+            self.refreshQueue()
+        }
+        run.onFinish = { [weak self] state, summary, fraction, snap, result in
+            guard let self else { return }
+            self.update(id) { j in
+                j.state = state
+                j.summary = summary
+                j.fraction = fraction
+                j.plan = nil
+                j.result = snap
+                j.checkResult = result
+            }
+            self.runs[id] = nil
+            self.lastFinishedID = id
+            self.refreshQueue()
+            self.advance()
+        }
+        runs[id] = run
         DockProgress.set(queueFraction)
-        switch job.kind {
-        case .copy: run(copy: job)
-        case .check: run(check: job)
-        }
-    }
-
-    private func finish(_ id: UUID?, state: QueueJob.State, summary: String, fraction: Double,
-                        _ extra: (inout QueueJob) -> Void = { _ in }) {
-        update(id) { j in
-            j.state = state
-            j.summary = summary
-            j.fraction = fraction
-            j.plan = nil
-            extra(&j)
-        }
-        lastFinishedID = id
-        currentID = nil
-        refreshQueue()
-        advance()
+        run.start(job)
     }
 
     private func refreshQueue() {
@@ -320,9 +638,10 @@ final class TransferModel: ObservableObject {
 
     /// Takes a job that hasn't started out of the queue, or clears a finished one from the list.
     func remove(_ id: UUID) {
-        guard id != currentID else { return }
+        guard runs[id] == nil else { return }
         queue.removeAll { $0.id == id }
         if inspectID == id { inspectID = nil }
+        advance()
     }
 
     func clearFinished() {
@@ -330,13 +649,28 @@ final class TransferModel: ObservableObject {
         inspectID = nil
     }
 
-    /// Stops the running job and everything waiting behind it.
+    func pause(_ id: UUID) { runs[id]?.pause() }
+    func resume(_ id: UUID) { runs[id]?.resume() }
+    /// Stops one running job. Jobs waiting for its drives start next.
+    func stop(_ id: UUID) { runs[id]?.stop() }
+
+    /// Stops every running job and everything waiting.
     func stopQueue() {
         for i in queue.indices where queue[i].state == .waiting {
             queue[i].state = .stopped
             queue[i].summary = "Not started"
         }
-        stop()
+        for run in runs.values { run.stop() }
+    }
+
+    /// Back to an empty setup screen.
+    func reset() {
+        sources = []
+        destinations = []
+        plans = [:]
+        conflict = .skip
+        mode = 0
+        inspectID = nil
     }
 
     // MARK: copy setup
@@ -486,170 +820,6 @@ final class TransferModel: ObservableObject {
         enqueue(job)
     }
 
-    // MARK: run a copy
-
-    private func run(copy job: QueueJob) {
-        let o = job.options
-        let srcs = job.sources.map(\.path)
-        let dests = job.dests.map(\.path)
-        runSources = job.sources
-        runDests = job.dests
-        runOptions = o
-        destNames = job.destNames
-        jobLine = "\(job.title)  ·  \(job.detail)"
-        lastDestCopied = []
-        destSpeeds = []
-        snap = TransferSnapshot()
-        history = []
-        peak = 0
-        speed = 0
-        etaText = nil
-        paceNote = nil
-        window = []
-        listedFiles = 0
-        engine = nil
-        stage = .preparing
-        let counter = Shared(0)
-        listCounter = counter
-        let stopFlag = Shared(false)
-        prepStop = stopFlag
-        startTimer()
-        // A listing less than ten minutes old is still good; older than that, look again.
-        var ready: TransferPlan?
-        if let plan = job.plan, let at = job.planAt, Date().timeIntervalSince(at) < 600 { ready = plan }
-        let prepared = ready
-        DispatchQueue.global(qos: .userInitiated).async { [weak self] in
-            let plan = prepared ?? TransferPlanner.build(sources: srcs, options: o, keepGoing: { !stopFlag.value },
-                                                         found: { n in counter.value = n })
-            var classes: [String: DeviceClass] = [:]
-            for p in srcs + dests { if let c = Hardware.expected(forPath: p) { classes[p] = c } }
-            let engine = TransferEngine(plan: plan, destinations: dests, options: o)
-            if stopFlag.value { engine.cancel() }
-            Task { @MainActor in self?.begin(engine, classes) }
-            engine.run()
-            Task { @MainActor in self?.finished(engine) }
-        }
-    }
-
-    private func startTimer() {
-        timer?.invalidate()
-        lastTick = Date()
-        lastBytes = 0
-        timer = Timer.scheduledTimer(withTimeInterval: 0.5, repeats: true) { [weak self] _ in
-            Task { @MainActor in self?.tick() }
-        }
-    }
-
-    private func begin(_ engine: TransferEngine, _ classes: [String: DeviceClass]) {
-        self.engine = engine
-        expected = classes
-        stage = .running
-        lastBytes = 0
-        lastTick = Date()
-    }
-
-    private func tick() {
-        if checkStage == .running { tickCheck(); return }
-        guard let engine else {
-            listedFiles = listCounter.value
-            return
-        }
-        let s = engine.snapshot()
-        let now = Date()
-        let dt = now.timeIntervalSince(lastTick)
-        let moved = s.copiedBytes + s.verifiedBytes
-        if dt > 0.2 {
-            let instant = s.paused ? 0 : Double(moved - lastBytes) / dt
-            speed = speed == 0 ? instant : speed * 0.7 + instant * 0.3
-            history.append(instant / 1_000_000)
-            if history.count > 240 { history.removeFirst(history.count - 240) }
-            peak = max(peak, instant)
-            if lastDestCopied.count != s.destCopied.count { lastDestCopied = Array(repeating: 0, count: s.destCopied.count) }
-            destSpeeds = s.destCopied.enumerated().map { i, c in
-                s.paused ? 0 : max(0, Double(c - lastDestCopied[i]) / dt)
-            }
-            lastDestCopied = s.destCopied
-            lastBytes = moved
-            lastTick = now
-            let left = Double((s.totalBytes + s.verifyTotal) - moved)
-            let recent = history.suffix(20)
-            let avg = recent.isEmpty ? 0 : recent.reduce(0, +) / Double(recent.count) * 1_000_000
-            etaText = (avg > 0 && !s.paused && history.count >= 6) ? ETA.text(left / avg) : nil
-            updatePace(s)
-            update(currentID) { j in
-                j.fraction = s.fraction
-                if s.totalBytes + s.verifyTotal > 0 { j.bytes = s.totalBytes + s.verifyTotal }
-            }
-            refreshQueue()
-        }
-        snap = s
-    }
-
-    /// Looks at the last ~20 seconds: which stage took the time, and is it under what that drive should do?
-    private func updatePace(_ s: TransferSnapshot) {
-        window.append((s.readNanos, s.writeNanos, s.copiedBytes, s.filesDone))
-        if window.count > 40 { window.removeFirst(window.count - 40) }
-        guard window.count >= 30, let first = window.first, !s.paused else { paceNote = nil; return }
-        let bytes = Double(s.copiedBytes - first.copied)
-        let files = max(1, s.filesDone - first.files)
-        guard bytes > 50_000_000 else { paceNote = nil; return }
-        let avgFile = Int64(bytes) / Int64(files)
-
-        let readSecs = Double(s.readNanos - first.read) / 1e9
-        var slowest: (name: String, verb: String, secs: Double, cls: DeviceClass?) =
-            (runSources.first?.name ?? "The source", "reading", readSecs, runSources.first.flatMap { expected[$0.path] })
-        for (i, d) in runDests.enumerated() where i < s.writeNanos.count && i < first.write.count {
-            let secs = Double(s.writeNanos[i] - first.write[i]) / 1e9
-            if secs > slowest.secs {
-                slowest = (d.volumeName.isEmpty ? d.name : d.volumeName, "writing", secs, expected[d.path])
-            }
-        }
-        guard slowest.secs > 1 else { paceNote = nil; return }
-        paceNote = Pace.transferNote(name: slowest.name, verb: slowest.verb, mbps: bytes / slowest.secs / 1_000_000,
-                                     expected: slowest.cls, averageFileBytes: avgFile)
-    }
-
-    private func finished(_ engine: TransferEngine) {
-        timer?.invalidate()
-        timer = nil
-        let s = engine.snapshot()
-        snap = s
-        speed = 0
-        etaText = nil
-        paceNote = nil
-        self.engine = nil
-        stage = .done
-        let state: QueueJob.State
-        let summary: String
-        if s.phase == .stopped {
-            state = .stopped
-            summary = "Stopped at \(Fmt.pct(s.fraction))"
-        } else if s.problems.isEmpty {
-            state = .done
-            summary = runOptions.verify == .off ? "\(Fmt.count(s.good)) files copied" : "\(Fmt.count(s.good)) files verified"
-        } else {
-            state = .attention
-            summary = "\(Fmt.count(s.problems.count)) need attention"
-        }
-        finish(currentID, state: state, summary: summary, fraction: s.phase == .stopped ? s.fraction : 1) { j in
-            j.result = s
-        }
-    }
-
-    func pause() { engine?.pause(); snap.paused = true }
-    func resume() { engine?.resume(); snap.paused = false }
-    /// Stops the running job. The queue moves on to the next one.
-    func stop() { prepStop.value = true; engine?.cancel(); compare?.cancel() }
-
-    /// Back to an empty setup screen.
-    func reset() {
-        sources = []
-        destinations = []
-        plans = [:]
-        conflict = .skip
-        mode = 0
-    }
-
     // MARK: check a copy
 
     func chooseFolder(original isOriginal: Bool) {
@@ -691,113 +861,6 @@ final class TransferModel: ObservableObject {
         enqueue(job)
     }
 
-    private func run(check job: QueueJob) {
-        let cmp = CompareJob()
-        compare = cmp
-        checkStage = .running
-        checkFraction = 0
-        checkStatus = "Listing both folders"
-        checkETA = nil
-        checkHashing = false
-        checkListed = 0
-        checkRate = 0
-        checkBytesDone = 0
-        checkBytesTotal = 0
-        checkFilesDone = 0
-        checkFilesTotal = 0
-        checkStarted = Date()
-        checkStartedAt = Date()
-        history = []
-        speed = 0
-        var want = 0
-        if let ea = expectedFiles?(job.original), let eb = expectedFiles?(job.copy) { want = ea + eb }
-        checkExpected = want
-        startTimer()
-        let a = job.original, b = job.copy, full = job.full, o = job.options
-        DispatchQueue.global(qos: .userInitiated).async { [weak self] in
-            let result = cmp.run(original: a, copy: b, full: full, options: o)
-            let cancelled = cmp.isCancelled
-            Task { @MainActor in self?.checkFinished(result, cancelled: cancelled, full: full) }
-        }
-    }
-
-    @Published private(set) var checkExpected = 0          // files a saved map says to expect (0 = no map)
-    private var lastListed = 0
-
-    private func tickCheck() {
-        guard let cmp = compare else { return }
-        let p = cmp.progress
-        let now = Date()
-        let dt = now.timeIntervalSince(lastTick)
-        guard dt > 0.2 else { return }
-        lastTick = now
-        let full = runningJob?.full ?? false
-        if !p.hashing {
-            // Listing: files found per second, and time left when a saved map says how many to expect.
-            let rate = max(0, Double(p.listed - lastListed) / dt)
-            lastListed = p.listed
-            checkRate = checkRate == 0 ? rate : checkRate * 0.7 + rate * 0.3
-            history.append(rate)
-            checkListed = p.listed
-            var listFraction = 0.0
-            if checkExpected > 0 { listFraction = min(0.99, Double(p.listed) / Double(checkExpected)) }
-            checkFraction = full ? 0 : listFraction
-            checkStatus = "Listing both folders"
-            checkETA = checkExpected > 0 ? ETA.text(started: checkStarted, fraction: listFraction) : nil
-        } else {
-            if !checkHashing {
-                // The checksum pass starts: a fresh graph, in MB/s.
-                checkHashing = true
-                history = []
-                lastBytes = 0
-                speed = 0
-            }
-            let instant = max(0, Double(p.bytesDone - lastBytes) / dt)
-            lastBytes = p.bytesDone
-            speed = speed == 0 ? instant : speed * 0.7 + instant * 0.3
-            history.append(instant / 1_000_000)
-            checkFraction = p.fraction
-            checkStatus = "Comparing checksums"
-            checkListed = p.listed
-            checkBytesDone = p.bytesDone
-            checkBytesTotal = p.bytesTotal
-            checkFilesDone = p.filesDone
-            checkFilesTotal = p.filesTotal
-            let recent = history.suffix(20)
-            let avg = recent.isEmpty ? 0 : recent.reduce(0, +) / Double(recent.count) * 1_000_000
-            checkETA = (avg > 0 && history.count >= 6) ? ETA.text(Double(p.bytesTotal - p.bytesDone) / avg) : nil
-        }
-        if history.count > 240 { history.removeFirst(history.count - 240) }
-        let f = checkFraction
-        update(currentID) { j in
-            j.fraction = f
-            if p.bytesTotal > 0 { j.bytes = p.bytesTotal }
-        }
-        refreshQueue()
-    }
-
-    private func checkFinished(_ result: CompareResult, cancelled: Bool, full: Bool) {
-        timer?.invalidate()
-        timer = nil
-        compare = nil
-        lastListed = 0
-        checkStage = .setup
-        checkETA = nil
-        speed = 0
-        if cancelled {
-            finish(currentID, state: .stopped, summary: "Stopped", fraction: checkFraction)
-            return
-        }
-        let state: QueueJob.State = result.isComplete ? .done : .attention
-        let summary: String
-        if result.isComplete {
-            summary = full ? "Complete, \(Fmt.count(result.matched)) checksums match" : "Complete, \(Fmt.count(result.matched)) files"
-        } else {
-            summary = "\(Fmt.count(result.missing.count)) missing, \(Fmt.count(result.different.count)) different"
-        }
-        finish(currentID, state: state, summary: summary, fraction: 1) { j in j.checkResult = result }
-    }
-
     /// Copies what a check found missing into the copy folder, keeping the folder structure.
     /// Files that exist but differ are left for you to decide.
     func copyMissing(from job: QueueJob) {
@@ -824,8 +887,7 @@ final class TransferModel: ObservableObject {
         next.bytes = plan.totalBytes * 2
         next.plan = plan
         next.planAt = Date.distantFuture      // an exact list of files; never listed again
-        inspectID = nil
         enqueue(next)
-        mode = 2
+        inspectID = next.id
     }
 }

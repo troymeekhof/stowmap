@@ -225,6 +225,14 @@ struct FileResult: Identifiable, Sendable {
     }
 }
 
+/// A file the copy hasn't reached yet.
+struct UpNext: Identifiable, Sendable {
+    let id: Int
+    let rel: String
+    let size: Int64
+    var name: String { (rel as NSString).lastPathComponent }
+}
+
 struct TransferSnapshot: Sendable {
     enum Phase: Sendable { case preparing, running, finished, stopped }
     var phase: Phase = .preparing
@@ -244,6 +252,7 @@ struct TransferSnapshot: Sendable {
     var destFilesVerified: [Int] = []
     var destDead: [String?] = []      // why a destination was dropped, if it was
     var recent: [FileResult] = []     // newest first
+    var upcoming: [UpNext] = []       // the next few files, soonest first
     var problems: [FileResult] = []
     var good = 0
     var alreadyThere = 0
@@ -325,6 +334,7 @@ final class TransferEngine: @unchecked Sendable {
         update { $0.phase = .running; $0.started = Date() }
         var folders: [PlanEntry] = []
         var index = 0
+        let fileEntries = plan.entries.filter { $0.kind == .file }
         for e in plan.entries {
             guard proceed() else { break }
             switch e.kind {
@@ -334,6 +344,11 @@ final class TransferEngine: @unchecked Sendable {
             case .symlink:
                 copyLink(e)
             case .file:
+                let from = index + 1
+                let next = (from..<min(fileEntries.count, from + 6)).map {
+                    UpNext(id: $0, rel: fileEntries[$0].rel, size: fileEntries[$0].size)
+                }
+                update { $0.upcoming = next }
                 copyFile(e, id: index)
                 index += 1
             }
@@ -353,6 +368,7 @@ final class TransferEngine: @unchecked Sendable {
             $0.finished = Date()
             $0.activity = ""
             $0.currentName = ""
+            $0.upcoming = []
         }
     }
 
@@ -636,7 +652,7 @@ final class TransferEngine: @unchecked Sendable {
                 $0.destFilesVerified[i] += 1
             }
             $0.recent.insert(result, at: 0)
-            if $0.recent.count > 60 { $0.recent.removeLast($0.recent.count - 60) }
+            if $0.recent.count > 200 { $0.recent.removeLast($0.recent.count - 200) }
         }
     }
 

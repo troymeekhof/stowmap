@@ -27,6 +27,45 @@ enum Hardware {
         return diskClass(bsdName: String(from.dropFirst(5)))
     }
 
+    /// Names the physical drive (or the network) behind a path. Two jobs whose keys don't overlap
+    /// can't slow each other down. Every network share counts as one, since they share the link.
+    static func deviceKey(forPath path: String) -> String {
+        var fs = statfs()
+        guard statfs(path, &fs) == 0 else { return "path:" + path }
+        if fs.f_flags & UInt32(MNT_LOCAL) == 0 { return "network" }
+        let from: String = withUnsafePointer(to: &fs.f_mntfromname) { tuple in
+            tuple.withMemoryRebound(to: CChar.self, capacity: MemoryLayout.size(ofValue: tuple.pointee)) {
+                String(cString: $0)
+            }
+        }
+        guard from.hasPrefix("/dev/") else { return "fs:" + from }
+        let bsd = String(from.dropFirst(5))
+        return "disk:" + (physicalDisk(bsdName: bsd) ?? bsd)
+    }
+
+    private static func mediaProperty(_ entry: io_registry_entry_t, _ key: String) -> Any? {
+        IORegistryEntryCreateCFProperty(entry, key as CFString, kCFAllocatorDefault, 0)?.takeRetainedValue()
+    }
+
+    /// The whole disk a volume really lives on (disk3s5 on an APFS container → disk0).
+    private static func physicalDisk(bsdName: String) -> String? {
+        guard let matching = IOBSDNameMatching(kIOMainPortDefault, 0, bsdName) else { return nil }
+        var entry = IOServiceGetMatchingService(kIOMainPortDefault, matching)
+        var found: String?
+        while entry != 0 {
+            if IOObjectConformsTo(entry, "IOMedia") != 0,
+               let whole = mediaProperty(entry, "Whole") as? Bool, whole,
+               let name = mediaProperty(entry, "BSD Name") as? String {
+                found = name
+            }
+            var parent: io_registry_entry_t = 0
+            let ok = IORegistryEntryGetParentEntry(entry, kIOServicePlane, &parent) == KERN_SUCCESS
+            IOObjectRelease(entry)
+            entry = ok ? parent : 0
+        }
+        return found
+    }
+
     // MARK: network
 
     /// Based on the fastest wired or Wi-Fi interface that is up and has an address.

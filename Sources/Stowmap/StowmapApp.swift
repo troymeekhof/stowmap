@@ -26,7 +26,7 @@ struct StowmapApp: App {
                 .environmentObject(model)
                 .environmentObject(transfer)
                 .environmentObject(Updater.shared)
-                .frame(minWidth: 960, minHeight: 640)
+                .frame(minWidth: 1100, minHeight: 640)
                 .background(Theme.windowBackground)
                 .ignoresSafeArea()
                 .preferredColorScheme(.dark)

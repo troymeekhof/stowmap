@@ -9,35 +9,64 @@ struct CopyView: View {
     @EnvironmentObject var transfer: TransferModel
 
     private var subtitle: String {
-        switch transfer.mode {
-        case 1: return "Compare a folder with its copy to see what's missing or different."
-        case 2:
-            if transfer.stage == .preparing { return "Listing what to copy  ·  \(Fmt.count(transfer.listedFiles)) files found" }
-            if let job = transfer.runningJob { return "\(job.title)  ·  \(job.detail)" }
-            return transfer.queue.isEmpty ? "Copies and checks you start are lined up here." : "Nothing is running."
-        default: return "Copy files to one or more drives and prove each copy with a checksum."
-        }
+        if let job = transfer.shownJob { return "\(job.title)  ·  \(job.detail)" }
+        if transfer.mode == 1 { return "Compare a folder with its copy to see what's missing or different." }
+        return "Copy files to one or more drives and prove each copy with a checksum."
+    }
+
+    /// Picking a tab always brings back the form for a new job.
+    private var tab: Binding<Int> {
+        Binding(get: { transfer.mode }, set: { transfer.mode = $0; transfer.inspectID = nil })
     }
 
     var body: some View {
+        let run = transfer.shownJob.flatMap { transfer.runs[$0.id] }
         VStack(alignment: .leading, spacing: 14) {
             ToolHeader(title: "Copy & Verify", subtitle: subtitle) {
-                GlassTabs(selection: $transfer.mode, tabs: [
-                    ("Copy", "square.and.arrow.down.on.square"), ("Check a Copy", "checklist"),
-                    ("Queue", "list.bullet.rectangle"),
+                if let run {
+                    if run.canPause {
+                        if run.isPaused {
+                            Button { transfer.resume(run.id) } label: { Label("Resume", systemImage: "play.fill") }
+                                .buttonStyle(QuietButtonStyle(tint: Theme.cyan))
+                        } else {
+                            Button { transfer.pause(run.id) } label: { Label("Pause", systemImage: "pause.fill") }
+                                .buttonStyle(QuietButtonStyle())
+                        }
+                    }
+                    Button { transfer.stop(run.id) } label: { Label("Stop", systemImage: "stop.fill") }
+                        .buttonStyle(QuietButtonStyle(tint: Theme.bad))
+                        .help("Stop this job. The rest of the queue carries on.")
+                }
+                GlassTabs(selection: tab, tabs: [
+                    ("New Copy", "square.and.arrow.down.on.square"), ("Check a Copy", "checklist"),
                 ])
-                .frame(width: 400)
+                .frame(width: 290)
+                Button { withAnimation(.easeOut(duration: 0.2)) { transfer.showQueue.toggle() } } label: {
+                    Label(transfer.isBusy && !transfer.showQueue ? "Queue \(Fmt.pct(transfer.queueFraction))" : "Queue",
+                          systemImage: "sidebar.right")
+                }
+                .buttonStyle(QuietButtonStyle(tint: transfer.showQueue ? Theme.cyan : .white))
+                .help(transfer.showQueue ? "Hide the queue" : "Show the queue")
             }
-            Group {
-                switch transfer.mode {
-                case 1: CheckCopyView()
-                case 2: QueuePane()
-                default: CopySetupView()
+            HStack(alignment: .top, spacing: 14) {
+                Group {
+                    if let job = transfer.shownJob {
+                        JobDetail(job: job)
+                    } else if transfer.mode == 1 {
+                        CheckCopyView()
+                    } else {
+                        CopySetupView()
+                    }
+                }
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+                if transfer.showQueue {
+                    QueueColumn().frame(width: 264)
+                        .transition(.move(edge: .trailing).combined(with: .opacity))
                 }
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity)
         }
-        .padding(.horizontal, 22).padding(.top, 30).padding(.bottom, 18)
+        .padding(.horizontal, 22).padding(.top, 16).padding(.bottom, 18)
     }
 }
 
@@ -380,12 +409,13 @@ private struct CopySetupView: View {
 
 private struct CopyRunningView: View {
     @EnvironmentObject var transfer: TransferModel
+    @ObservedObject var run: JobRun
 
     var body: some View {
-        let s = transfer.snap
+        let s = run.snap
         VStack(spacing: 14) {
             hero(s)
-            if let note = transfer.paceNote {
+            if let note = run.paceNote {
                 HStack(spacing: 8) {
                     Image(systemName: "exclamationmark.triangle.fill").font(.system(size: 13)).foregroundStyle(Theme.amber)
                     Text(note).font(.system(size: 12)).foregroundStyle(Theme.amber)
@@ -402,33 +432,35 @@ private struct CopyRunningView: View {
     // MARK: hero
 
     private func hero(_ s: TransferSnapshot) -> some View {
-        Card(padding: 22) {
-            HStack(alignment: .center, spacing: 28) {
+        Card(padding: 18) {
+            HStack(alignment: .center, spacing: 22) {
                 ring(s)
                 VStack(alignment: .leading, spacing: 0) {
                     HStack(alignment: .top) {
                         HStack(alignment: .firstTextBaseline, spacing: 8) {
-                            Text(speedNumber).font(.system(size: 56, weight: .bold, design: .rounded)).monospacedDigit()
+                            Text(speedNumber).font(.system(size: 34, weight: .bold, design: .rounded)).monospacedDigit()
                                 .contentTransition(.numericText())
-                            Text("MB/s").font(.system(size: 18, weight: .semibold, design: .rounded))
+                            Text("MB/s").font(.system(size: 14, weight: .semibold, design: .rounded))
                                 .foregroundStyle(Theme.textSecondary)
                         }
                         Spacer(minLength: 8)
-                        HStack(spacing: 14) {
+                        HStack(spacing: 10) {
                             if s.paused { Pill(text: "Paused", color: Theme.amber) }
                             key(AnyShapeStyle(Theme.brand), "Copied \(Fmt.pct(s.copyFraction))")
-                            key(AnyShapeStyle(Theme.green), "Verified \(Fmt.pct(s.verifyFraction))")
+                            Text("whole job").font(.system(size: 10.5)).foregroundStyle(Color.white.opacity(0.4))
+                            key(AnyShapeStyle(Theme.cyan), "Verified \(Fmt.pct(s.verifyFraction))")
+                            key(AnyShapeStyle(Theme.green), "Queue \(Fmt.pct(transfer.queueFraction))")
                         }
                         .padding(.top, 8)
                     }
-                    SpeedGraph(values: transfer.history).frame(height: 124)
-                        .padding(.top, 10).padding(.bottom, 16)
+                    SpeedGraph(values: run.graph).frame(height: 96)
+                        .padding(.top, 8).padding(.bottom, 12)
                     HStack(spacing: 0) {
                         cell("Copied", Fmt.bytes(s.copiedBytes), "of \(Fmt.bytes(s.totalBytes))", first: true)
                         cell("Files", Fmt.count(s.filesDone), "of \(Fmt.count(s.filesTotal))")
-                        cell("Time left", transfer.etaText?.replacingOccurrences(of: " left", with: "")
+                        cell("Time left", run.etaText?.replacingOccurrences(of: " left", with: "")
                                 .replacingOccurrences(of: "about ", with: "") ?? "Working it out",
-                             transfer.runOptions.verify == .off ? "copying only" : "with verifying")
+                             run.runOptions.verify == .off ? "copying only" : "with verifying")
                         cell("Elapsed", elapsed(s), "started \(startClock(s))")
                     }
                 }
@@ -447,12 +479,12 @@ private struct CopyRunningView: View {
     private func cell(_ label: String, _ value: String, _ note: String, first: Bool = false) -> some View {
         HStack(spacing: 0) {
             if !first {
-                Rectangle().fill(Color.white.opacity(0.08)).frame(width: 1, height: 44).padding(.trailing, 16)
+                Rectangle().fill(Color.white.opacity(0.08)).frame(width: 1, height: 40).padding(.trailing, 10)
             }
             VStack(alignment: .leading, spacing: 4) {
                 Text(label).font(.system(size: 11, weight: .medium)).foregroundStyle(Theme.textSecondary)
-                Text(value).font(.system(size: 17, weight: .bold, design: .rounded)).monospacedDigit()
-                    .lineLimit(1).minimumScaleFactor(0.7)
+                Text(value).font(.system(size: 15, weight: .bold, design: .rounded)).monospacedDigit()
+                    .lineLimit(1).minimumScaleFactor(0.6)
                 Text(note).font(.system(size: 11)).foregroundStyle(Color.white.opacity(0.45)).monospacedDigit()
                     .lineLimit(1)
             }
@@ -462,7 +494,7 @@ private struct CopyRunningView: View {
     }
 
     private var speedNumber: String {
-        let mb = transfer.speed / 1_000_000
+        let mb = run.speed / 1_000_000
         return mb >= 100 ? String(format: "%.0f", mb) : String(format: "%.1f", mb)
     }
 
@@ -479,39 +511,40 @@ private struct CopyRunningView: View {
         return f.string(from: s.started)
     }
 
-    /// 260 pt. Outer track = copied (violet to cyan), inner = verified (green), both from 12 o'clock.
-    /// The centre shows bytes copied, then bytes verified once copying is done.
+    /// 200 pt. Outer track = this job (violet to cyan), inner = the whole queue (green), both from 12 o'clock.
     private func ring(_ s: TransferSnapshot) -> some View {
-        let copying = s.copyFraction < 1 || transfer.stage == .preparing
-        let shown = copying ? s.copyFraction : s.verifyFraction
-        let digits = String(Int((shown * 100).rounded(.down)))
+        let copying = s.copyFraction < 1 || run.stage == .preparing
+        let digits = String(Int((s.fraction * 100).rounded(.down)))
+        let queue = transfer.queueFraction
         return ZStack {
-            Circle().stroke(Color.white.opacity(0.07), lineWidth: 16).padding(14)
-            Circle().trim(from: 0, to: max(0.002, s.copyFraction))
-                .stroke(Theme.brand, style: StrokeStyle(lineWidth: 16, lineCap: .round))
+            Circle().stroke(Color.white.opacity(0.07), lineWidth: 13).padding(10)
+            Circle().trim(from: 0, to: max(0.002, s.fraction))
+                .stroke(Theme.brand, style: StrokeStyle(lineWidth: 13, lineCap: .round))
                 .rotationEffect(.degrees(-90))
-                .padding(14)
+                .padding(10)
                 .shadow(color: Theme.violet.opacity(0.35), radius: 10)
-                .animation(.easeOut(duration: 0.4), value: s.copyFraction)
-            Circle().stroke(Color.white.opacity(0.07), lineWidth: 8).padding(33)
-            Circle().trim(from: 0, to: max(0.002, s.verifyFraction))
-                .stroke(Theme.green, style: StrokeStyle(lineWidth: 8, lineCap: .round))
+                .animation(.easeOut(duration: 0.4), value: s.fraction)
+            Circle().stroke(Color.white.opacity(0.07), lineWidth: 6).padding(26)
+            Circle().trim(from: 0, to: max(0.002, queue))
+                .stroke(Theme.green, style: StrokeStyle(lineWidth: 6, lineCap: .round))
                 .rotationEffect(.degrees(-90))
-                .padding(33)
-                .animation(.easeOut(duration: 0.4), value: s.verifyFraction)
-            VStack(spacing: 6) {
+                .padding(26)
+                .animation(.easeOut(duration: 0.4), value: queue)
+            VStack(spacing: 5) {
                 HStack(alignment: .firstTextBaseline, spacing: 2) {
-                    Text(digits).font(.system(size: 60, weight: .bold, design: .rounded)).monospacedDigit()
-                        .tracking(-2).contentTransition(.numericText())
-                    Text("%").font(.system(size: 28, weight: .semibold, design: .rounded))
+                    Text(digits).font(.system(size: 36, weight: .bold, design: .rounded)).monospacedDigit()
+                        .tracking(-1).contentTransition(.numericText())
+                    Text("%").font(.system(size: 16, weight: .semibold, design: .rounded))
                         .foregroundStyle(Theme.textSecondary)
                 }
-                Text(transfer.stage == .preparing ? "Preparing" : (copying ? "Copying" : "Verifying"))
-                    .font(.system(size: 13, weight: .semibold))
+                Text(run.stage == .preparing ? "Preparing" : (copying ? "Copying" : "Verifying"))
+                    .font(.system(size: 12.5, weight: .semibold))
                     .foregroundStyle(copying ? Theme.cyan : Theme.green)
+                Text("Queue \(Fmt.pct(queue))").font(.system(size: 11, weight: .medium)).monospacedDigit()
+                    .foregroundStyle(Theme.green.opacity(0.85))
             }
         }
-        .frame(width: 260, height: 260)
+        .frame(width: 200, height: 200)
     }
 
     // MARK: destinations
@@ -519,7 +552,7 @@ private struct CopyRunningView: View {
     private func lanes(_ s: TransferSnapshot) -> some View {
         Card(padding: 12) {
             VStack(spacing: 0) {
-                ForEach(Array(transfer.destNames.enumerated()), id: \.offset) { i, name in
+                ForEach(Array(run.destNames.enumerated()), id: \.offset) { i, name in
                     if i > 0 { Rectangle().fill(Color.white.opacity(0.06)).frame(height: 1) }
                     lane(s, i, name)
                 }
@@ -533,8 +566,8 @@ private struct CopyRunningView: View {
         let dead = i < s.destDead.count ? s.destDead[i] : nil
         let total = Double(max(1, s.totalBytes))
         let parts = name.components(separatedBy: " · ")
-        let speed: Double = i < transfer.destSpeeds.count ? transfer.destSpeeds[i] : 0
-        let slow: Bool = transfer.paceNote != nil && speed > 0
+        let speed: Double = i < run.destSpeeds.count ? run.destSpeeds[i] : 0
+        let slow: Bool = run.paceNote != nil && speed > 0
         let writing: String
         if s.paused {
             writing = "Paused"
@@ -580,6 +613,7 @@ private struct CopyRunningView: View {
 
     // MARK: files
 
+    /// What's coming, what's in hand, what's done: one list, newest work at the top.
     private func files(_ s: TransferSnapshot) -> some View {
         Card(padding: 8) {
             VStack(alignment: .leading, spacing: 2) {
@@ -594,31 +628,49 @@ private struct CopyRunningView: View {
                 }
                 .padding(.horizontal, 10).padding(.top, 6).padding(.bottom, 4)
 
-                if !s.currentName.isEmpty {
-                    let f = s.currentSize > 0 ? Double(s.currentDone) / Double(s.currentSize) : 0
-                    let verifying = s.activity == "Verifying"
-                    HStack(spacing: 10) {
-                        Image(systemName: "doc.fill").font(.system(size: 12)).foregroundStyle(Theme.violet).frame(width: 18)
-                        Text(s.currentName).font(.system(size: 12.5, weight: .semibold)).lineLimit(1).truncationMode(.middle)
-                        Spacer(minLength: 8)
-                        MeterBar(fraction: f, color: verifying ? Theme.green : Theme.cyan, height: 5).frame(width: 250)
-                        Text(Fmt.bytes(s.currentSize)).font(.system(size: 12, weight: .semibold, design: .rounded))
-                            .monospacedDigit().frame(width: 68, alignment: .trailing)
-                        Text(Fmt.pct(f)).font(.system(size: 12, weight: .semibold, design: .rounded)).monospacedDigit()
-                            .foregroundStyle(verifying ? Theme.green : Theme.cyan).frame(width: 70, alignment: .trailing)
-                        ProgressView().controlSize(.small).scaleEffect(0.6).frame(width: 14, height: 14)
-                    }
-                    .padding(.horizontal, 10).frame(height: 30)
-                    .background(RoundedRectangle(cornerRadius: 8, style: .continuous).fill(Color.white.opacity(0.06)))
-                }
                 ScrollView {
                     LazyVStack(spacing: 0) {
-                        ForEach(s.recent) { r in TransferFileRow(result: r, destNames: transfer.destNames) }
+                        ForEach(s.upcoming.reversed()) { u in waiting(u) }
+                        if !s.currentName.isEmpty { current(s) }
+                        ForEach(s.recent) { r in TransferFileRow(result: r, destNames: run.destNames) }
                     }
                 }
             }
         }
         .frame(maxHeight: .infinity)
+    }
+
+    private func current(_ s: TransferSnapshot) -> some View {
+        let f = s.currentSize > 0 ? Double(s.currentDone) / Double(s.currentSize) : 0
+        let verifying = s.activity == "Verifying"
+        return HStack(spacing: 10) {
+            Image(systemName: verifying ? "checkmark.shield.fill" : "arrow.right.circle.fill").font(.system(size: 12))
+                .foregroundStyle(verifying ? Theme.green : Theme.cyan).frame(width: 18)
+            Text(s.currentName).font(.system(size: 12.5, weight: .semibold)).lineLimit(1).truncationMode(.middle)
+            Spacer(minLength: 8)
+            MeterBar(fraction: f, color: verifying ? Theme.green : Theme.cyan, height: 5).frame(width: 120)
+            Text(Fmt.bytes(s.currentSize)).font(.system(size: 12, weight: .semibold, design: .rounded))
+                .monospacedDigit().frame(width: 68, alignment: .trailing)
+            Text("\(verifying ? "Verifying" : "Copying") \(Fmt.pct(f))").font(.system(size: 11, weight: .semibold, design: .rounded))
+                .monospacedDigit().lineLimit(1)
+                .foregroundStyle(verifying ? Theme.green : Theme.cyan).frame(width: 104, alignment: .trailing)
+        }
+        .padding(.horizontal, 10).frame(height: 30)
+        .background(RoundedRectangle(cornerRadius: 8, style: .continuous).fill(Color.white.opacity(0.07)))
+    }
+
+    private func waiting(_ u: UpNext) -> some View {
+        HStack(spacing: 10) {
+            Image(systemName: "clock").font(.system(size: 11)).foregroundStyle(Theme.textTertiary).frame(width: 18)
+            Text(u.name).font(.system(size: 12.5)).foregroundStyle(Theme.textSecondary).lineLimit(1).truncationMode(.middle)
+            Spacer(minLength: 8)
+            MeterBar(fraction: 0, color: Theme.cyan, height: 5).frame(width: 120)
+            Text(Fmt.bytes(u.size)).font(.system(size: 12, weight: .medium, design: .rounded))
+                .monospacedDigit().foregroundStyle(Theme.textSecondary).frame(width: 68, alignment: .trailing)
+            Text("Next").font(.system(size: 11, weight: .medium)).foregroundStyle(Theme.textTertiary)
+                .frame(width: 104, alignment: .trailing)
+        }
+        .padding(.horizontal, 10).frame(height: 28)
     }
 }
 
@@ -653,7 +705,7 @@ private struct TransferFileRow: View {
                 Text(result.name).font(.system(size: 12.5)).lineLimit(1).truncationMode(.middle)
                 Spacer(minLength: 8)
                 Text(folder).font(.system(size: 11)).foregroundStyle(Color.white.opacity(0.4))
-                    .lineLimit(1).truncationMode(.head).frame(width: 250, alignment: .leading)
+                    .lineLimit(1).truncationMode(.head).frame(width: 120, alignment: .leading)
                 Text(Fmt.bytes(result.size)).font(.system(size: 12, weight: .semibold, design: .rounded))
                     .monospacedDigit().frame(width: 68, alignment: .trailing)
                 Group {
@@ -849,7 +901,7 @@ private struct CheckCopyView: View {
                     Text("Nothing is changed in either folder. If files are missing you can copy just those across afterwards.")
                         .font(.system(size: 12.5)).foregroundStyle(Theme.textSecondary)
                         .fixedSize(horizontal: false, vertical: true)
-                    Text("You can line up several checks and copies. They run one after another in the Queue tab.")
+                    Text("Line up as many checks and copies as you like. Jobs on separate drives run at the same time; the rest take turns.")
                         .font(.system(size: 12.5)).foregroundStyle(Theme.textSecondary)
                         .fixedSize(horizontal: false, vertical: true)
                     if let b = transfer.checkBlocker {
@@ -886,36 +938,37 @@ private struct CheckCopyView: View {
 /// A check in progress: ring, live speed, graph, time left.
 private struct CheckRunningView: View {
     @EnvironmentObject var transfer: TransferModel
+    @ObservedObject var run: JobRun
     var job: QueueJob
 
     var body: some View {
-        let hashing = transfer.checkHashing
+        let hashing = run.checkHashing
         VStack(spacing: 14) {
-            Card(padding: 22) {
-                HStack(alignment: .center, spacing: 28) {
+            Card(padding: 18) {
+                HStack(alignment: .center, spacing: 22) {
                     ring(hashing)
                     VStack(alignment: .leading, spacing: 0) {
                         HStack(alignment: .firstTextBaseline, spacing: 8) {
-                            Text(bigNumber(hashing)).font(.system(size: 56, weight: .bold, design: .rounded)).monospacedDigit()
+                            Text(bigNumber(hashing)).font(.system(size: 34, weight: .bold, design: .rounded)).monospacedDigit()
                                 .contentTransition(.numericText())
-                            Text(hashing ? "MB/s" : "files/s").font(.system(size: 18, weight: .semibold, design: .rounded))
+                            Text(hashing ? "MB/s" : "files/s").font(.system(size: 14, weight: .semibold, design: .rounded))
                                 .foregroundStyle(Theme.textSecondary)
                             Spacer(minLength: 8)
-                            Pill(text: transfer.checkStatus, color: hashing ? Theme.green : Theme.cyan)
+                            Pill(text: run.checkStatus, color: hashing ? Theme.green : Theme.cyan)
                         }
-                        SpeedGraph(values: transfer.history).frame(height: 124)
-                            .padding(.top, 10).padding(.bottom, 16)
+                        SpeedGraph(values: run.graph).frame(height: 96)
+                            .padding(.top, 8).padding(.bottom, 12)
                         HStack(spacing: 0) {
                             if hashing {
-                                cell("Compared", Fmt.bytes(transfer.checkBytesDone), "of \(Fmt.bytes(transfer.checkBytesTotal)), both sides", first: true)
-                                cell("Files", Fmt.count(transfer.checkFilesDone), "of \(Fmt.count(transfer.checkFilesTotal))")
+                                cell("Compared", Fmt.bytes(run.checkBytesDone), "of \(Fmt.bytes(run.checkBytesTotal)), both sides", first: true)
+                                cell("Files", Fmt.count(run.checkFilesDone), "of \(Fmt.count(run.checkFilesTotal))")
                             } else {
-                                cell("Found", Fmt.count(transfer.checkListed),
-                                     transfer.checkExpected > 0 ? "of about \(Fmt.count(transfer.checkExpected))" : "files, both sides", first: true)
+                                cell("Found", Fmt.count(run.checkListed),
+                                     run.checkExpected > 0 ? "of about \(Fmt.count(run.checkExpected))" : "files, both sides", first: true)
                                 cell("Then", job.full ? "Checksums" : "Results", job.full ? "reads both sides" : "names and sizes")
                             }
                             cell("Time left", timeLeft(hashing), timeNote(hashing))
-                            cell("Elapsed", clock(since: transfer.checkStartedAt), job.full ? "full check" : "quick check")
+                            cell("Elapsed", clock(since: run.startedAt), job.full ? "full check" : "quick check")
                         }
                     }
                 }
@@ -933,65 +986,72 @@ private struct CheckRunningView: View {
 
     private func bigNumber(_ hashing: Bool) -> String {
         if hashing {
-            let mb = transfer.speed / 1_000_000
+            let mb = run.speed / 1_000_000
             return mb >= 100 ? String(format: "%.0f", mb) : String(format: "%.1f", mb)
         }
-        return Fmt.count(Int(transfer.checkRate.rounded()))
+        return Fmt.count(Int(run.checkRate.rounded()))
     }
 
     private func timeLeft(_ hashing: Bool) -> String {
-        if let eta = transfer.checkETA {
+        if let eta = run.checkETA {
             return eta.replacingOccurrences(of: " left", with: "").replacingOccurrences(of: "about ", with: "")
         }
-        return hashing || transfer.checkExpected > 0 ? "Working it out" : "Not known yet"
+        return hashing || run.checkExpected > 0 ? "Working it out" : "Not known yet"
     }
 
     private func timeNote(_ hashing: Bool) -> String {
         if hashing { return "for the checksums" }
-        return transfer.checkExpected > 0 ? "for the listing" : "no saved map of these folders"
+        return run.checkExpected > 0 ? "for the listing" : "no saved map of these folders"
     }
 
     private func ring(_ hashing: Bool) -> some View {
-        let f = transfer.checkFraction
-        let counting = !hashing && transfer.checkExpected == 0
+        let f = run.checkFraction
+        let counting = !hashing && run.checkExpected == 0
         return ZStack {
-            Circle().stroke(Color.white.opacity(0.07), lineWidth: 16).padding(14)
+            Circle().stroke(Color.white.opacity(0.07), lineWidth: 13).padding(10)
             Circle().trim(from: 0, to: max(0.002, f))
-                .stroke(hashing ? AnyShapeStyle(Theme.green) : AnyShapeStyle(Theme.brand),
-                        style: StrokeStyle(lineWidth: 16, lineCap: .round))
+                .stroke(Theme.brand, style: StrokeStyle(lineWidth: 13, lineCap: .round))
                 .rotationEffect(.degrees(-90))
-                .padding(14)
+                .padding(10)
                 .animation(.easeOut(duration: 0.4), value: f)
-            VStack(spacing: 6) {
+            Circle().stroke(Color.white.opacity(0.07), lineWidth: 6).padding(26)
+            Circle().trim(from: 0, to: max(0.002, transfer.queueFraction))
+                .stroke(Theme.green, style: StrokeStyle(lineWidth: 6, lineCap: .round))
+                .rotationEffect(.degrees(-90))
+                .padding(26)
+                .animation(.easeOut(duration: 0.4), value: transfer.queueFraction)
+            VStack(spacing: 5) {
                 if counting || (!hashing && job.full) {
-                    Text(Fmt.count(transfer.checkListed)).font(.system(size: 40, weight: .bold, design: .rounded))
+                    Text(Fmt.count(run.checkListed)).font(.system(size: 26, weight: .bold, design: .rounded))
                         .monospacedDigit().minimumScaleFactor(0.5).lineLimit(1).contentTransition(.numericText())
                     Text("files found").font(.system(size: 13, weight: .semibold)).foregroundStyle(Theme.cyan)
                 } else {
                     HStack(alignment: .firstTextBaseline, spacing: 2) {
-                        Text(String(Int((f * 100).rounded(.down)))).font(.system(size: 60, weight: .bold, design: .rounded))
-                            .monospacedDigit().tracking(-2).contentTransition(.numericText())
-                        Text("%").font(.system(size: 28, weight: .semibold, design: .rounded))
+                        Text(String(Int((f * 100).rounded(.down)))).font(.system(size: 36, weight: .bold, design: .rounded))
+                            .monospacedDigit().tracking(-1).contentTransition(.numericText())
+                        Text("%").font(.system(size: 16, weight: .semibold, design: .rounded))
                             .foregroundStyle(Theme.textSecondary)
                     }
                     Text(hashing ? "Comparing" : "Listing").font(.system(size: 13, weight: .semibold))
                         .foregroundStyle(hashing ? Theme.green : Theme.cyan)
                 }
+                Text("Queue \(Fmt.pct(transfer.queueFraction))").font(.system(size: 11, weight: .medium)).monospacedDigit()
+                    .foregroundStyle(Theme.green.opacity(0.85))
             }
-            .padding(.horizontal, 44)
+            .padding(.horizontal, 40)
         }
-        .frame(width: 260, height: 260)
+        .frame(width: 200, height: 200)
     }
 
     private func cell(_ label: String, _ value: String, _ note: String, first: Bool = false) -> some View {
         HStack(spacing: 0) {
             if !first {
-                Rectangle().fill(Color.white.opacity(0.08)).frame(width: 1, height: 44).padding(.trailing, 16)
+                Rectangle().fill(Color.white.opacity(0.08)).frame(width: 1, height: 40).padding(.trailing, 10)
             }
             VStack(alignment: .leading, spacing: 4) {
                 Text(label).font(.system(size: 11, weight: .medium)).foregroundStyle(Theme.textSecondary)
-                Text(value).font(.system(size: 17, weight: .bold, design: .rounded)).monospacedDigit()
-                    .lineLimit(1).minimumScaleFactor(0.7)
+                Text(value).font(.system(size: 15, weight: .bold, design: .rounded)).monospacedDigit()
+                    .lineLimit(1).minimumScaleFactor(0.6)
                 Text(note).font(.system(size: 11)).foregroundStyle(Color.white.opacity(0.45)).monospacedDigit()
                     .lineLimit(1)
             }
@@ -1109,42 +1169,14 @@ private struct CheckResultView: View {
 
 // MARK: - Queue
 
-/// The Queue tab: overall progress, the list of jobs, and the selected job in full.
-private struct QueuePane: View {
+/// The job picked in the queue, shown in full: live while it runs, its result afterwards.
+private struct JobDetail: View {
     @EnvironmentObject var transfer: TransferModel
+    var job: QueueJob
 
     var body: some View {
-        VStack(spacing: 14) {
-            if transfer.queue.isEmpty {
-                Card(padding: 24) {
-                    VStack(alignment: .leading, spacing: 10) {
-                        CardTitle(text: "Nothing in the queue", symbol: "list.bullet.rectangle")
-                        Text("Start a copy or a check and it runs here. Add more while one is running and they follow on, one after another.")
-                            .font(.system(size: 12.5)).foregroundStyle(Theme.textSecondary)
-                            .fixedSize(horizontal: false, vertical: true)
-                        HStack(spacing: 8) {
-                            Button { transfer.mode = 0 } label: { Label("New Copy", systemImage: "plus") }
-                                .buttonStyle(QuietButtonStyle(tint: Theme.cyan))
-                            Button { transfer.mode = 1 } label: { Label("Check a Copy", systemImage: "checklist") }
-                                .buttonStyle(QuietButtonStyle())
-                        }
-                    }
-                    .frame(maxWidth: 560, alignment: .leading)
-                    .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
-                }
-            } else {
-                QueueStrip()
-                if let job = transfer.shownJob {
-                    detail(job)
-                }
-            }
-        }
-    }
-
-    @ViewBuilder
-    private func detail(_ job: QueueJob) -> some View {
-        if job.state == .running {
-            if job.kind == .copy { CopyRunningView() } else { CheckRunningView(job: job) }
+        if job.state == .running, let run = transfer.runs[job.id] {
+            if job.kind == .copy { CopyRunningView(run: run) } else { CheckRunningView(run: run, job: job) }
         } else if job.kind == .copy, job.result != nil, job.isFinished {
             CopyDoneView(job: job)
         } else if let r = job.checkResult {
@@ -1154,8 +1186,14 @@ private struct QueuePane: View {
                 VStack(alignment: .leading, spacing: 8) {
                     Text(job.title).font(.system(size: 20, weight: .bold, design: .rounded))
                     Text(job.detail).font(.system(size: 12.5)).foregroundStyle(Theme.textSecondary)
-                    Text(job.state == .waiting ? "Waiting for the jobs ahead of it." : job.summary)
+                    Text(job.state == .waiting ? "Waiting for a drive or the network link that another job is using. It starts by itself."
+                                               : job.summary)
                         .font(.system(size: 12.5)).foregroundStyle(Theme.textSecondary)
+                        .fixedSize(horizontal: false, vertical: true)
+                    if job.state == .waiting {
+                        Button { transfer.remove(job.id) } label: { Label("Take Out of the Queue", systemImage: "xmark") }
+                            .buttonStyle(QuietButtonStyle())
+                    }
                 }
                 .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
             }
@@ -1163,112 +1201,104 @@ private struct QueuePane: View {
     }
 }
 
-/// Overall queue progress, the controls, and one row per job with its own bar.
-private struct QueueStrip: View {
+/// The queue beside the page: overall progress and one row per job with its own bar.
+private struct QueueColumn: View {
     @EnvironmentObject var transfer: TransferModel
 
     var body: some View {
         let busy = transfer.isBusy
-        let pos = transfer.queuePosition
-        Card(padding: 12) {
-            VStack(alignment: .leading, spacing: 9) {
-                HStack(spacing: 10) {
-                    VStack(alignment: .leading, spacing: 2) {
-                        Text(headline(busy, pos)).font(.system(size: 14, weight: .bold, design: .rounded)).monospacedDigit()
-                        Text(subline(busy)).font(.system(size: 11.5)).foregroundStyle(Theme.textSecondary).monospacedDigit()
-                    }
-                    Spacer(minLength: 8)
+        Card(padding: 10) {
+            VStack(alignment: .leading, spacing: 8) {
+                HStack(spacing: 6) {
+                    Text("Queue").font(.system(size: 13, weight: .bold, design: .rounded))
                     if busy {
-                        if transfer.stage == .running || transfer.stage == .preparing, transfer.checkStage != .running {
-                            if transfer.snap.paused {
-                                Button { transfer.resume() } label: { Label("Resume", systemImage: "play.fill") }
-                                    .buttonStyle(QuietButtonStyle(tint: Theme.cyan))
-                            } else {
-                                Button { transfer.pause() } label: { Label("Pause", systemImage: "pause.fill") }
-                                    .buttonStyle(QuietButtonStyle())
-                            }
-                        }
-                        Button { transfer.stop() } label: { Label(transfer.waitingCount > 0 ? "Skip" : "Stop", systemImage: "stop.fill") }
+                        Text(Fmt.pct(transfer.queueFraction)).font(.system(size: 13, weight: .bold, design: .rounded))
+                            .monospacedDigit().foregroundStyle(Theme.green)
+                    }
+                    Spacer(minLength: 4)
+                    if busy && transfer.runningCount + transfer.waitingCount > 1 {
+                        Button("Stop All") { transfer.stopQueue() }
                             .buttonStyle(QuietButtonStyle(tint: Theme.bad))
-                            .help(transfer.waitingCount > 0 ? "Stop this job and go on to the next" : "Stop this job")
-                        if transfer.waitingCount > 0 {
-                            Button { transfer.stopQueue() } label: { Label("Stop All", systemImage: "xmark.octagon.fill") }
-                                .buttonStyle(QuietButtonStyle(tint: Theme.bad))
-                                .help("Stop this job and everything waiting")
-                        }
-                    } else {
-                        Button { transfer.clearFinished() } label: { Label("Clear", systemImage: "trash") }
+                            .help("Stop every job that is running or waiting")
+                    } else if !busy && !transfer.queue.isEmpty {
+                        Button("Clear") { transfer.clearFinished() }
                             .buttonStyle(QuietButtonStyle())
                             .help("Clear finished jobs from the list")
                     }
                 }
+                .padding(.horizontal, 4).padding(.top, 2)
                 if busy {
-                    GradientBar(fraction: transfer.queueFraction, height: 6)
+                    MeterBar(fraction: transfer.queueFraction, color: Theme.green, height: 5)
+                        .animation(.easeOut(duration: 0.3), value: transfer.queueFraction)
+                        .padding(.horizontal, 4)
+                    Text(status).font(.system(size: 11)).foregroundStyle(Theme.textSecondary).monospacedDigit()
+                        .fixedSize(horizontal: false, vertical: true).padding(.horizontal, 4)
                 }
-                if transfer.queue.count > 1 {
+                if transfer.queue.isEmpty {
+                    Text("Jobs you start appear here. Jobs on separate drives run at the same time; jobs that share a drive or the network take turns.")
+                        .font(.system(size: 11.5)).foregroundStyle(Theme.textSecondary)
+                        .fixedSize(horizontal: false, vertical: true).padding(.horizontal, 4).padding(.top, 2)
+                    Spacer(minLength: 0)
+                } else {
                     ScrollView {
-                        VStack(spacing: 2) {
+                        VStack(spacing: 4) {
                             ForEach(transfer.queue) { job in row(job) }
                         }
                     }
-                    .frame(height: CGFloat(min(transfer.queue.count, 4)) * 34)
                 }
             }
+            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
         }
     }
 
-    private func headline(_ busy: Bool, _ pos: (index: Int, of: Int)) -> String {
-        guard busy else {
-            let n = transfer.queue.count
-            return "Queue finished  ·  \(n) job\(n == 1 ? "" : "s")"
-        }
-        if pos.of <= 1 { return "Running 1 job  ·  \(Fmt.pct(transfer.queueFraction))" }
-        return "Job \(pos.index) of \(pos.of)  ·  queue \(Fmt.pct(transfer.queueFraction))"
-    }
-
-    private func subline(_ busy: Bool) -> String {
-        guard busy else {
-            let trouble = transfer.queue.filter { $0.state == .attention }.count
-            return trouble == 0 ? "Pick a job to see its result." : "\(trouble) job\(trouble == 1 ? "" : "s") need attention."
-        }
-        let waiting = transfer.waitingCount
-        let eta = transfer.queueETA ?? "working out the time left"
-        return waiting == 0 ? "Whole queue: \(eta)" : "Whole queue: \(eta)  ·  \(waiting) waiting"
+    private var status: String {
+        let running = transfer.runningCount, waiting = transfer.waitingCount
+        var parts = ["\(running) running" + (waiting > 0 ? ", \(waiting) waiting" : "")]
+        parts.append(String(format: "%.0f MB/s", transfer.totalSpeed / 1_000_000))
+        parts.append(transfer.queueETA ?? "working out the time left")
+        return parts.joined(separator: "  ·  ")
     }
 
     private func row(_ job: QueueJob) -> some View {
-        let selected = transfer.shownJob?.id == job.id
+        let selected = transfer.inspectID == job.id
         let tint = color(job.state)
-        return HStack(spacing: 10) {
-            Image(systemName: symbol(job)).font(.system(size: 12, weight: .semibold)).foregroundStyle(tint).frame(width: 18)
-            Text(job.title).font(.system(size: 12.5, weight: .semibold)).lineLimit(1).truncationMode(.middle)
-                .frame(width: 190, alignment: .leading)
-            Text(job.isFinished ? job.summary : job.detail).font(.system(size: 11.5))
+        return VStack(alignment: .leading, spacing: 5) {
+            HStack(spacing: 7) {
+                Image(systemName: symbol(job)).font(.system(size: 11, weight: .semibold)).foregroundStyle(tint).frame(width: 14)
+                Text(job.title).font(.system(size: 12, weight: .semibold)).lineLimit(1).truncationMode(.middle)
+                Spacer(minLength: 4)
+                if job.state != .running {
+                    Button { transfer.remove(job.id) } label: {
+                        Image(systemName: "xmark").font(.system(size: 8, weight: .bold)).foregroundStyle(Theme.textSecondary)
+                            .frame(width: 16, height: 16)
+                    }
+                    .buttonStyle(.plain)
+                    .help(job.state == .waiting ? "Take out of the queue" : "Clear from the list")
+                }
+            }
+            if job.state == .running {
+                MeterBar(fraction: job.fraction, color: Theme.cyan, height: 4)
+            }
+            Text(line(job)).font(.system(size: 10.5)).monospacedDigit()
                 .foregroundStyle(job.state == .attention ? Theme.warn : Theme.textSecondary)
                 .lineLimit(1).truncationMode(.tail)
-            Spacer(minLength: 8)
-            if job.state == .running || job.state == .waiting {
-                MeterBar(fraction: job.fraction, color: Theme.cyan, height: 5).frame(width: 130)
-                Text(job.state == .waiting ? "Waiting" : Fmt.pct(job.fraction))
-                    .font(.system(size: 11.5, weight: .semibold, design: .rounded)).monospacedDigit()
-                    .foregroundStyle(job.state == .waiting ? Theme.textSecondary : Theme.cyan)
-                    .frame(width: 58, alignment: .trailing)
-            }
-            if job.state != .running {
-                Button { transfer.remove(job.id) } label: {
-                    Image(systemName: "xmark").font(.system(size: 9, weight: .bold)).foregroundStyle(Theme.textSecondary)
-                        .frame(width: 18, height: 18)
-                }
-                .buttonStyle(.plain)
-                .help(job.state == .waiting ? "Take out of the queue" : "Clear from the list")
-            } else {
-                Color.clear.frame(width: 18, height: 18)
-            }
         }
-        .padding(.horizontal, 8).frame(height: 32)
-        .background(RoundedRectangle(cornerRadius: 8, style: .continuous).fill(Color.white.opacity(selected ? 0.09 : 0.03)))
+        .padding(.horizontal, 8).padding(.vertical, 7)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(RoundedRectangle(cornerRadius: 9, style: .continuous).fill(Color.white.opacity(selected ? 0.10 : 0.035)))
         .contentShape(Rectangle())
-        .onTapGesture { transfer.inspectID = job.state == .running ? nil : job.id }
+        .onTapGesture { transfer.inspectID = job.id }
+    }
+
+    private func line(_ job: QueueJob) -> String {
+        switch job.state {
+        case .waiting: return "Waiting  ·  " + job.detail
+        case .running:
+            guard let run = transfer.runs[job.id] else { return Fmt.pct(job.fraction) }
+            let mb = run.liveSpeed > 0 ? String(format: "%.0f MB/s", run.liveSpeed / 1_000_000) : nil
+            return [Fmt.pct(job.fraction), mb, run.eta].compactMap { $0 }.joined(separator: "  ·  ")
+        case .done, .attention, .stopped: return job.summary
+        }
     }
 
     private func symbol(_ job: QueueJob) -> String {

@@ -9,10 +9,15 @@ struct ContentView: View {
     @State private var dropTargeted = false
 
     var body: some View {
-        HStack(spacing: 0) {
-            Sidebar()
-                .frame(width: 250)
-            Rectangle().fill(Color.white.opacity(0.06)).frame(width: 1)
+        VStack(spacing: 0) {
+          TopTabs()
+          Rectangle().fill(Color.white.opacity(0.06)).frame(height: 1)
+          HStack(spacing: 0) {
+            if model.pane == .drive || model.pane == .search {
+                Sidebar()
+                    .frame(width: 250)
+                Rectangle().fill(Color.white.opacity(0.06)).frame(width: 1)
+            }
             Group {
                 switch model.pane {
                 case .search:
@@ -32,6 +37,7 @@ struct ContentView: View {
                 }
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity)
+          }
         }
         .foregroundStyle(.white)
         .overlay {
@@ -58,6 +64,109 @@ struct ContentView: View {
             }
             return true
         }
+    }
+}
+
+/// The three parts of the app, as tabs across the top of the window. Each shows its own progress.
+struct TopTabs: View {
+    @EnvironmentObject var model: AppModel
+    @EnvironmentObject var transfer: TransferModel
+
+    var body: some View {
+        HStack(spacing: 4) {
+            tab("Drives", "externaldrive.fill", selected: model.pane == .drive || model.pane == .search,
+                busy: model.scanningCount > 0, fraction: nil, status: drivesStatus) { model.pane = .drive }
+            tab("Duplicates", "doc.on.doc.fill", selected: model.pane == .duplicates,
+                busy: dupBusy, fraction: dupFraction, status: dupStatus) { model.pane = .duplicates }
+            tab("Copy & Verify", "square.and.arrow.down.on.square.fill", selected: model.pane == .copy,
+                busy: transfer.isBusy, fraction: transfer.busyFraction, status: copyStatus) { model.pane = .copy }
+        }
+        .padding(4)
+        .background(RoundedRectangle(cornerRadius: 13, style: .continuous).fill(Color.white.opacity(0.05)))
+        .frame(maxWidth: .infinity)
+        .padding(.top, 8).padding(.bottom, 8)
+    }
+
+    private func tab(_ title: String, _ symbol: String, selected: Bool, busy: Bool, fraction: Double?,
+                     status: String, action: @escaping () -> Void) -> some View {
+        Button {
+            withAnimation(.easeOut(duration: 0.18)) { action() }
+        } label: {
+            VStack(alignment: .leading, spacing: 4) {
+                HStack(spacing: 8) {
+                    Image(systemName: symbol).font(.system(size: 12, weight: .semibold))
+                        .foregroundStyle(selected ? Color.white : Theme.textSecondary)
+                    VStack(alignment: .leading, spacing: 1) {
+                        Text(title).font(.system(size: 12.5, weight: .semibold))
+                            .foregroundStyle(selected ? Color.white : Color.white.opacity(0.75))
+                        Text(status).font(.system(size: 10)).foregroundStyle(Theme.textSecondary)
+                            .monospacedDigit().lineLimit(1)
+                    }
+                    Spacer(minLength: 0)
+                    if busy {
+                        ProgressView().controlSize(.small).scaleEffect(0.7).frame(width: 14, height: 14)
+                    }
+                }
+                MeterBar(fraction: fraction ?? 0, color: Theme.cyan, height: 3)
+                    .opacity(busy && fraction != nil ? 1 : 0)
+            }
+            .padding(.horizontal, 12).padding(.top, 7).padding(.bottom, 5)
+            .frame(width: 236, alignment: .leading)
+            .background(RoundedRectangle(cornerRadius: 10, style: .continuous)
+                .fill(Color.white.opacity(selected ? 0.11 : 0.0001)))
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+    }
+
+    private var drivesStatus: String {
+        let n = model.scanningCount
+        return n > 0 ? "Scanning \(n) drive\(n == 1 ? "" : "s")" : "Maps of every drive"
+    }
+
+    private var copyStatus: String {
+        if transfer.isBusy {
+            let waiting = transfer.waitingCount
+            let tail = waiting > 0 ? "\(waiting) waiting" : nil
+            if transfer.runningCount == 1, let run = transfer.runs.values.first {
+                let what: String
+                if run.kind == .check {
+                    what = run.checkHashing ? "Checking  \(Fmt.pct(run.checkFraction))" : "Listing  \(Fmt.count(run.checkListed)) files"
+                } else if run.stage == .preparing {
+                    what = "Listing  \(Fmt.count(run.listedFiles)) files"
+                } else {
+                    what = "\(Fmt.pct(run.fraction))  ·  \(String(format: "%.0f MB/s", run.speed / 1_000_000))"
+                }
+                return [what, waiting > 0 ? transfer.queueETA : run.eta, tail].compactMap { $0 }.joined(separator: "  ·  ")
+            }
+            let mb = String(format: "%.0f MB/s", transfer.totalSpeed / 1_000_000)
+            return ["\(transfer.runningCount) jobs  ·  \(Fmt.pct(transfer.queueFraction))  ·  \(mb)", transfer.queueETA, tail]
+                .compactMap { $0 }.joined(separator: "  ·  ")
+        }
+        if let last = transfer.lastFinishedJob { return last.summary }
+        return "Copy with checksums"
+    }
+
+    private var dupBusy: Bool { model.dupPhase == .running || model.isVerifying }
+
+    private var dupFraction: Double {
+        model.dupPhase == .running ? model.dupProgress.fraction : model.verifyOverall
+    }
+
+    private var dupStatus: String {
+        if model.dupPhase == .running {
+            let stage = model.dupProgress.total > 0 ? "Comparing files" : "Reading maps"
+            return ["\(stage)  \(Fmt.pct(model.dupProgress.fraction))", model.dupETA].compactMap { $0 }.joined(separator: "  ·  ")
+        }
+        if model.isVerifying {
+            return ["Verifying  \(Fmt.pct(model.verifyOverall))", model.dupETA].compactMap { $0 }.joined(separator: "  ·  ")
+        }
+        if model.dupPhase == .done {
+            if model.dupMatches.isEmpty { return "None found in \(model.dupScopeName)" }
+            let wasted = model.dupGroups.reduce(Int64(0)) { $0 + $1.wasted }
+            return "\(Fmt.bytes(wasted)) to free in \(Fmt.count(model.dupMatches.count)) folder\(model.dupMatches.count == 1 ? "" : "s")"
+        }
+        return "Find identical files"
     }
 }
 
@@ -114,7 +223,7 @@ struct Sidebar: View {
                     .frame(width: 26, height: 26)
                 Text("Stowmap").font(.system(size: 19, weight: .bold, design: .rounded))
             }
-            .padding(.top, 38).padding(.horizontal, 18).padding(.bottom, 12)
+            .padding(.top, 14).padding(.horizontal, 18).padding(.bottom, 12)
 
             tools
 
@@ -217,51 +326,7 @@ struct Sidebar: View {
         }
     }
 
-    private var copyStatus: String {
-        let pos = transfer.queuePosition
-        let lead = transfer.isBusy && pos.of > 1 ? "Job \(pos.index) of \(pos.of)  ·  " : ""
-        if transfer.checkStage == .running {
-            let what = transfer.checkHashing ? "Checking  \(Fmt.pct(transfer.checkFraction))"
-                                             : "Listing  \(Fmt.count(transfer.checkListed)) files"
-            return lead + [what, transfer.checkETA].compactMap { $0 }.joined(separator: "  ·  ")
-        }
-        switch transfer.stage {
-        case .preparing: return lead + "Listing  \(Fmt.count(transfer.listedFiles)) files"
-        case .running:
-            let mb = String(format: "%.0f MB/s", transfer.speed / 1_000_000)
-            return lead + ["\(Fmt.pct(transfer.snap.fraction))  ·  \(mb)", transfer.etaText].compactMap { $0 }.joined(separator: "  ·  ")
-        case .done:
-            if let last = transfer.queue.last(where: { $0.isFinished }) { return last.summary }
-            return "Copy with checksums"
-        case .setup:
-            if let last = transfer.queue.last(where: { $0.isFinished }) { return last.summary }
-            return "Copy with checksums"
-        }
-    }
-
-    private var dupBusy: Bool { model.dupPhase == .running || model.isVerifying }
-
-    private var dupFraction: Double {
-        model.dupPhase == .running ? model.dupProgress.fraction : model.verifyOverall
-    }
-
-    private var dupStatus: String {
-        if model.dupPhase == .running {
-            let stage = model.dupProgress.total > 0 ? "Comparing files" : "Reading maps"
-            return ["\(stage)  \(Fmt.pct(model.dupProgress.fraction))", model.dupETA].compactMap { $0 }.joined(separator: "  ·  ")
-        }
-        if model.isVerifying {
-            return ["Verifying  \(Fmt.pct(model.verifyOverall))", model.dupETA].compactMap { $0 }.joined(separator: "  ·  ")
-        }
-        if model.dupPhase == .done {
-            if model.dupMatches.isEmpty { return "None found in \(model.dupScopeName)" }
-            let wasted = model.dupGroups.reduce(Int64(0)) { $0 + $1.wasted }
-            return "\(Fmt.bytes(wasted)) to free in \(Fmt.count(model.dupMatches.count)) folder\(model.dupMatches.count == 1 ? "" : "s")"
-        }
-        return "Find identical files"
-    }
-
-    /// Search box and Duplicates: the two tools that look across every drive.
+    /// Search across every scanned drive.
     private var tools: some View {
         VStack(spacing: 6) {
             HStack(spacing: 7) {
@@ -291,85 +356,6 @@ struct Sidebar: View {
                     .padding(.horizontal, 4)
             }
 
-            Button {
-                withAnimation(.easeOut(duration: 0.18)) { model.pane = .duplicates }
-            } label: {
-                // Laid out like a drive row: icon tile, name, a bar while it works, a line of status.
-                HStack(spacing: 10) {
-                    ZStack {
-                        RoundedRectangle(cornerRadius: 9, style: .continuous)
-                            .fill(model.pane == .duplicates ? AnyShapeStyle(Theme.brand) : AnyShapeStyle(Color.white.opacity(0.08)))
-                        Image(systemName: "doc.on.doc.fill").font(.system(size: 12, weight: .semibold))
-                    }
-                    .frame(width: 32, height: 32)
-                    VStack(alignment: .leading, spacing: 4) {
-                        HStack(spacing: 6) {
-                            Text("Duplicates").font(.system(size: 12.5, weight: .semibold))
-                            Spacer(minLength: 0)
-                            if dupBusy {
-                                ProgressView().controlSize(.small).scaleEffect(0.7).frame(width: 14, height: 14)
-                            } else if model.dupPhase == .done {
-                                Image(systemName: "checkmark.circle.fill").font(.system(size: 10))
-                                    .foregroundStyle(Theme.good.opacity(0.8))
-                            }
-                        }
-                        if dupBusy {
-                            MeterBar(fraction: dupFraction, color: Theme.cyan)
-                                .animation(.easeOut(duration: 0.2), value: dupFraction)
-                        }
-                        Text(dupStatus)
-                            .font(.system(size: 10)).foregroundStyle(Theme.textSecondary)
-                            .monospacedDigit().lineLimit(1)
-                    }
-                }
-                .padding(8)
-                .background(RoundedRectangle(cornerRadius: 12, style: .continuous)
-                    .fill(Color.white.opacity(model.pane == .duplicates ? 0.09 : 0.0001)))
-                .contentShape(Rectangle())
-            }
-            .buttonStyle(.plain)
-            .help("Find identical files across the drives you've scanned")
-
-            Button {
-                withAnimation(.easeOut(duration: 0.18)) { model.pane = .copy }
-            } label: {
-                HStack(spacing: 10) {
-                    ZStack {
-                        RoundedRectangle(cornerRadius: 9, style: .continuous)
-                            .fill(model.pane == .copy ? AnyShapeStyle(Theme.brand) : AnyShapeStyle(Color.white.opacity(0.08)))
-                        Image(systemName: "square.and.arrow.down.on.square.fill").font(.system(size: 12, weight: .semibold))
-                    }
-                    .frame(width: 32, height: 32)
-                    VStack(alignment: .leading, spacing: 4) {
-                        HStack(spacing: 6) {
-                            Text("Copy & Verify").font(.system(size: 12.5, weight: .semibold))
-                            Spacer(minLength: 0)
-                            if transfer.isBusy {
-                                ProgressView().controlSize(.small).scaleEffect(0.7).frame(width: 14, height: 14)
-                            } else if transfer.stage == .done {
-                                Image(systemName: transfer.snap.problems.isEmpty && transfer.snap.phase == .finished
-                                      ? "checkmark.circle.fill" : "exclamationmark.triangle.fill")
-                                    .font(.system(size: 10))
-                                    .foregroundStyle(transfer.snap.problems.isEmpty && transfer.snap.phase == .finished
-                                                     ? Theme.good.opacity(0.8) : Theme.warn)
-                            }
-                        }
-                        if transfer.isBusy {
-                            MeterBar(fraction: transfer.busyFraction, color: Theme.cyan)
-                                .animation(.easeOut(duration: 0.2), value: transfer.busyFraction)
-                        }
-                        Text(copyStatus)
-                            .font(.system(size: 10)).foregroundStyle(Theme.textSecondary)
-                            .monospacedDigit().lineLimit(1)
-                    }
-                }
-                .padding(8)
-                .background(RoundedRectangle(cornerRadius: 12, style: .continuous)
-                    .fill(Color.white.opacity(model.pane == .copy ? 0.09 : 0.0001)))
-                .contentShape(Rectangle())
-            }
-            .buttonStyle(.plain)
-            .help("Copy files between drives and verify them with checksums")
         }
         .padding(.horizontal, 10).padding(.bottom, 12)
         .background {
@@ -586,7 +572,7 @@ struct DetailView: View {
                     .transition(.move(edge: .bottom).combined(with: .opacity))
             }
         }
-        .padding(.horizontal, 22).padding(.top, 30).padding(.bottom, 18)
+        .padding(.horizontal, 22).padding(.top, 16).padding(.bottom, 18)
         .confirmationDialog("Move \(session.collected.count) item\(session.collected.count == 1 ? "" : "s") to the Trash?",
                             isPresented: $confirmTrash) {
             Button("Move to Trash (\(Fmt.bytes(session.collectedBytes)))", role: .destructive) {
