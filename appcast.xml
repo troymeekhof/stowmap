@@ -3,6 +3,15 @@
   <channel>
     <title>Stowmap</title>
     <item>
+      <title>Version 1.5</title>
+      <pubDate>Wed, 18 Nov 2026 02:26:27 GMT</pubDate>
+      <sparkle:version>1.5</sparkle:version>
+      <sparkle:shortVersionString>1.5</sparkle:shortVersionString>
+      <sparkle:minimumSystemVersion>13.0</sparkle:minimumSystemVersion>
+      <description><![CDATA[<p>Jobs on separate drives now run at the same time; jobs that share a drive or the network take turns. The queue is a column beside the copy form. The inner ring shows the whole queue, the graph covers the whole job, and the file list shows next, current and finished files. Drives, Duplicates and Copy &amp; Verify are tabs across the top. Duplicates: tick which drives to include.</p>]]></description>
+      <enclosure url="https://github.com/troymeekhof/stowmap/releases/download/v1.5/Stowmap-1.5.zip" type="application/octet-stream" sparkle:edSignature="3N/1lzXo0HCZBS2KxUxFK7WedfumA6EWJOmFe8KDZc2Q6K+vFNZqBD3wMt3SPdMKXA9wvehakFxBY3ukTeYhDA==" length="4297414" />
+    </item>
+    <item>
       <title>Version 1.4</title>
       <pubDate>Wed, 18 Nov 2026 01:31:07 GMT</pubDate>
       <sparkle:version>1.4</sparkle:version>
