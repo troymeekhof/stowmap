@@ -218,19 +218,24 @@ struct Sidebar: View {
     }
 
     private var copyStatus: String {
+        let pos = transfer.queuePosition
+        let lead = transfer.isBusy && pos.of > 1 ? "Job \(pos.index) of \(pos.of)  ·  " : ""
         if transfer.checkStage == .running {
-            return ["Checking a copy  \(Fmt.pct(transfer.checkFraction))", transfer.checkETA].compactMap { $0 }.joined(separator: "  ·  ")
+            let what = transfer.checkHashing ? "Checking  \(Fmt.pct(transfer.checkFraction))"
+                                             : "Listing  \(Fmt.count(transfer.checkListed)) files"
+            return lead + [what, transfer.checkETA].compactMap { $0 }.joined(separator: "  ·  ")
         }
         switch transfer.stage {
-        case .preparing: return "Listing files"
+        case .preparing: return lead + "Listing  \(Fmt.count(transfer.listedFiles)) files"
         case .running:
             let mb = String(format: "%.0f MB/s", transfer.speed / 1_000_000)
-            return ["\(Fmt.pct(transfer.snap.fraction))  ·  \(mb)", transfer.etaText].compactMap { $0 }.joined(separator: "  ·  ")
+            return lead + ["\(Fmt.pct(transfer.snap.fraction))  ·  \(mb)", transfer.etaText].compactMap { $0 }.joined(separator: "  ·  ")
         case .done:
-            if transfer.snap.phase == .stopped { return "Stopped" }
-            return transfer.snap.problems.isEmpty ? "\(Fmt.count(transfer.snap.good)) files verified"
-                                                  : "\(transfer.snap.problems.count) need attention"
-        case .setup: return "Copy with checksums"
+            if let last = transfer.queue.last(where: { $0.isFinished }) { return last.summary }
+            return "Copy with checksums"
+        case .setup:
+            if let last = transfer.queue.last(where: { $0.isFinished }) { return last.summary }
+            return "Copy with checksums"
         }
     }
 

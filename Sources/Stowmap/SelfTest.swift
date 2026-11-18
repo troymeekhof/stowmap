@@ -136,6 +136,16 @@ enum SelfTest {
         r = CompareJob().run(original: proj, copy: d2 + "/Proj", full: true, options: cmp)
         check(r.missing.count == 1 && r.different.count == 2 && r.extra.count == 1, "full check also finds the file changed without changing size")
 
+        // 10b. The parallel listing used by copies and checks: every file, at its real size, plus the link.
+        let listed = TransferPlanner.contents(of: proj, options: cmp)
+        let sizesRight = listed.entries.filter { $0.kind == .file }.allSatisfy { e in
+            ((try? fm.attributesOfItem(atPath: e.source))?[.size] as? NSNumber)?.int64Value == e.size
+        }
+        let hasLink = listed.entries.contains(where: { $0.kind == .symlink && $0.rel == "link" })
+        check(listed.fileCount == files.count && sizesRight && hasLink, "the fast listing has every file at its real size")
+        let viaBuild = TransferPlanner.build(sources: [proj], options: cmp)
+        check(viaBuild.fileCount == files.count && viaBuild.totalBytes == listed.totalBytes, "copy planning and folder listing agree")
+
         // 11. The fast folder listing used for network shares must agree with the classic one.
         func listing(_ path: String, bulk: Bool) -> [String: String]? {
             guard let dir = opendir(path) else { return nil }

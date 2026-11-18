@@ -9,45 +9,30 @@ struct CopyView: View {
     @EnvironmentObject var transfer: TransferModel
 
     private var subtitle: String {
-        if transfer.mode == 1 { return "Compare a folder with its copy to see what's missing or different." }
-        switch transfer.stage {
-        case .setup: return "Copy files to one or more drives and prove each copy with a checksum."
-        case .preparing: return "Listing what to copy…"
-        case .running: return transfer.jobLine
-        case .done: return transfer.snap.phase == .stopped ? "Stopped before finishing." : "Finished."
+        switch transfer.mode {
+        case 1: return "Compare a folder with its copy to see what's missing or different."
+        case 2:
+            if transfer.stage == .preparing { return "Listing what to copy  ·  \(Fmt.count(transfer.listedFiles)) files found" }
+            if let job = transfer.runningJob { return "\(job.title)  ·  \(job.detail)" }
+            return transfer.queue.isEmpty ? "Copies and checks you start are lined up here." : "Nothing is running."
+        default: return "Copy files to one or more drives and prove each copy with a checksum."
         }
     }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 14) {
             ToolHeader(title: "Copy & Verify", subtitle: subtitle) {
-                if transfer.mode == 0 && (transfer.stage == .running || transfer.stage == .preparing) {
-                    if transfer.snap.paused {
-                        Button { transfer.resume() } label: { Label("Resume", systemImage: "play.fill") }
-                            .buttonStyle(QuietButtonStyle(tint: Theme.cyan))
-                    } else {
-                        Button { transfer.pause() } label: { Label("Pause", systemImage: "pause.fill") }
-                            .buttonStyle(QuietButtonStyle())
-                    }
-                    Button { transfer.stop() } label: { Label("Stop", systemImage: "stop.fill") }
-                        .buttonStyle(QuietButtonStyle(tint: Theme.bad))
-                } else {
-                    GlassTabs(selection: $transfer.mode, tabs: [
-                        ("Copy", "square.and.arrow.down.on.square"), ("Check a Copy", "checklist"),
-                    ])
-                    .frame(width: 300)
-                    .disabled(transfer.isBusy)
-                }
+                GlassTabs(selection: $transfer.mode, tabs: [
+                    ("Copy", "square.and.arrow.down.on.square"), ("Check a Copy", "checklist"),
+                    ("Queue", "list.bullet.rectangle"),
+                ])
+                .frame(width: 400)
             }
             Group {
-                if transfer.mode == 1 {
-                    CheckCopyView()
-                } else {
-                    switch transfer.stage {
-                    case .setup: CopySetupView()
-                    case .preparing, .running: CopyRunningView()
-                    case .done: CopyDoneView()
-                    }
+                switch transfer.mode {
+                case 1: CheckCopyView()
+                case 2: QueuePane()
+                default: CopySetupView()
                 }
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity)
@@ -369,8 +354,10 @@ private struct CopySetupView: View {
                     }
                 }
                 Spacer(minLength: 8)
-                Button { transfer.start() } label: {
-                    Label("Start Copy", systemImage: "arrow.right.circle.fill").font(.system(size: 14, weight: .semibold))
+                Button { transfer.enqueueCopy() } label: {
+                    Label(transfer.isBusy ? "Add to Queue" : "Start Copy",
+                          systemImage: transfer.isBusy ? "text.badge.plus" : "arrow.right.circle.fill")
+                        .font(.system(size: 14, weight: .semibold))
                 }
                 .buttonStyle(GlowButtonStyle())
                 .disabled(transfer.blocker != nil)
@@ -441,7 +428,7 @@ private struct CopyRunningView: View {
                         cell("Files", Fmt.count(s.filesDone), "of \(Fmt.count(s.filesTotal))")
                         cell("Time left", transfer.etaText?.replacingOccurrences(of: " left", with: "")
                                 .replacingOccurrences(of: "about ", with: "") ?? "Working it out",
-                             transfer.verify == .off ? "copying only" : "with verifying")
+                             transfer.runOptions.verify == .off ? "copying only" : "with verifying")
                         cell("Elapsed", elapsed(s), "started \(startClock(s))")
                     }
                 }
@@ -710,9 +697,10 @@ private struct TransferFileRow: View {
 
 private struct CopyDoneView: View {
     @EnvironmentObject var transfer: TransferModel
+    var job: QueueJob
 
     var body: some View {
-        let s = transfer.snap
+        let s = job.result ?? TransferSnapshot()
         let stopped = s.phase == .stopped
         let clean = s.problems.isEmpty && !stopped
         let tint = clean ? Theme.good : (stopped ? Theme.amber : Theme.bad)
@@ -737,11 +725,11 @@ private struct CopyDoneView: View {
                         HStack(spacing: 26) {
                             Stat(label: "Copied", value: Fmt.bytes(s.copiedBytes))
                             Stat(label: "Took", value: Fmt.duration((s.finished ?? Date()).timeIntervalSince(s.started)))
-                            Stat(label: "Average", value: String(format: "%.0f MB/s", transfer.averageSpeed / 1_000_000))
-                            Stat(label: "Checksum", value: transfer.hash.title)
+                            Stat(label: "Average", value: String(format: "%.0f MB/s", average(s) / 1_000_000))
+                            Stat(label: "Checksum", value: job.options.hash.title)
                         }
                         HStack(spacing: 8) {
-                            if let first = transfer.destinations.first {
+                            if let first = job.dests.first {
                                 Button { Finder.open(first.path) } label: { Label("Show in Finder", systemImage: "folder") }
                                     .buttonStyle(QuietButtonStyle())
                             }
@@ -763,9 +751,9 @@ private struct CopyDoneView: View {
                         .padding(.horizontal, 10).padding(.top, 6)
                     ScrollView {
                         LazyVStack(spacing: 0) {
-                            ForEach(s.problems) { r in FileResultRow(result: r, destNames: transfer.destNames) }
+                            ForEach(s.problems) { r in FileResultRow(result: r, destNames: job.destNames) }
                             ForEach(s.recent.filter { !$0.worst.isProblem }) { r in
-                                FileResultRow(result: r, destNames: transfer.destNames)
+                                FileResultRow(result: r, destNames: job.destNames)
                             }
                             if s.filesDone > s.recent.count {
                                 Text("Showing the last \(s.recent.count) files and every problem. The checksum list has them all.")
@@ -779,10 +767,16 @@ private struct CopyDoneView: View {
         }
     }
 
+    private func average(_ s: TransferSnapshot) -> Double {
+        guard let end = s.finished else { return 0 }
+        let secs = end.timeIntervalSince(s.started)
+        return secs > 0 ? Double(s.copiedBytes) / secs : 0
+    }
+
     private func headline(_ s: TransferSnapshot) -> String {
         if s.phase == .stopped { return "Stopped at \(Fmt.pct(s.fraction))" }
         if s.problems.isEmpty {
-            if transfer.verify == .off { return "All \(Fmt.count(s.good)) files copied" }
+            if job.options.verify == .off { return "All \(Fmt.count(s.good)) files copied" }
             return "All \(Fmt.count(s.good)) files verified"
         }
         return "\(Fmt.count(s.good)) fine, \(Fmt.count(s.problems.count)) need attention"
@@ -793,7 +787,7 @@ private struct CopyDoneView: View {
             return "Files finished before you stopped are complete and in place. The file in progress was discarded, so nothing half-written was left behind."
         }
         var parts: [String] = []
-        if transfer.verify != .off && s.problems.isEmpty {
+        if job.options.verify != .off && s.problems.isEmpty {
             parts.append("Every copy was read back from the disk and its checksum matches the source.")
         }
         if s.alreadyThere > 0 {
@@ -806,6 +800,13 @@ private struct CopyDoneView: View {
 }
 
 // MARK: - Check a copy
+
+/// Elapsed time as 4:07 or 1:02:45.
+private func clock(since start: Date) -> String {
+    let t = max(0, Int(Date().timeIntervalSince(start)))
+    return t >= 3600 ? String(format: "%d:%02d:%02d", t / 3600, (t % 3600) / 60, t % 60)
+                     : String(format: "%d:%02d", t / 60, t % 60)
+}
 
 private struct CheckCopyView: View {
     @EnvironmentObject var transfer: TransferModel
@@ -826,52 +827,37 @@ private struct CheckCopyView: View {
                     Text("Full: checksums").tag(true)
                 }
                 .pickerStyle(.segmented).labelsHidden().frame(width: 360)
-                .disabled(transfer.checkStage == .running)
                 Text(transfer.checkFull ? "Reads both sides in full. Finds damage that keeps the same size."
                                         : "Fast. Finds missing and incomplete files.")
                     .font(.system(size: 11.5)).foregroundStyle(Theme.textSecondary)
                 Spacer(minLength: 8)
-                if transfer.checkStage == .running {
-                    Button("Stop") { transfer.stopCheck() }.buttonStyle(QuietButtonStyle())
-                } else {
-                    Button { transfer.startCheck() } label: {
-                        Label(transfer.checkStage == .done ? "Check Again" : "Check", systemImage: "checklist")
-                    }
-                    .buttonStyle(GlowButtonStyle())
-                    .disabled(transfer.checkBlocker != nil)
-                    .opacity(transfer.checkBlocker != nil ? 0.45 : 1)
+                Button { transfer.enqueueCheck() } label: {
+                    Label(transfer.isBusy ? "Add to Queue" : "Check",
+                          systemImage: transfer.isBusy ? "text.badge.plus" : "checklist")
                 }
+                .buttonStyle(GlowButtonStyle())
+                .disabled(transfer.checkBlocker != nil)
+                .opacity(transfer.checkBlocker != nil ? 0.45 : 1)
             }
 
-            if transfer.checkStage == .running {
-                MeterBar(fraction: transfer.checkFraction, color: Theme.cyan, height: 6)
-                    .animation(.easeOut(duration: 0.2), value: transfer.checkFraction)
-                Text([transfer.checkStatus, transfer.checkFull ? Fmt.pct(transfer.checkFraction) : nil, transfer.checkETA]
-                    .compactMap { $0 }.joined(separator: "  ·  "))
-                    .font(.system(size: 12, weight: .semibold)).foregroundStyle(Theme.cyan).monospacedDigit()
-            }
-
-            Group {
-                if let r = transfer.checkResult, transfer.checkStage == .done {
-                    results(r)
-                } else {
-                    Card(padding: 24) {
-                        VStack(alignment: .leading, spacing: 10) {
-                            CardTitle(text: "What it tells you", symbol: "questionmark.circle")
-                            Text("Whether every file in the original is in the copy, which ones are missing, which are a different size (usually an interrupted copy), and what is only in the copy.")
-                                .font(.system(size: 12.5)).foregroundStyle(Theme.textSecondary)
-                                .fixedSize(horizontal: false, vertical: true)
-                            Text("Nothing is changed in either folder. If files are missing you can copy just those across afterwards.")
-                                .font(.system(size: 12.5)).foregroundStyle(Theme.textSecondary)
-                                .fixedSize(horizontal: false, vertical: true)
-                            if let b = transfer.checkBlocker {
-                                Text(b).font(.system(size: 12)).foregroundStyle(Theme.textTertiary)
-                            }
-                        }
-                        .frame(maxWidth: 560, alignment: .leading)
-                        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+            Card(padding: 24) {
+                VStack(alignment: .leading, spacing: 10) {
+                    CardTitle(text: "What it tells you", symbol: "questionmark.circle")
+                    Text("Whether every file in the original is in the copy, which ones are missing, which are a different size (usually an interrupted copy), and what is only in the copy.")
+                        .font(.system(size: 12.5)).foregroundStyle(Theme.textSecondary)
+                        .fixedSize(horizontal: false, vertical: true)
+                    Text("Nothing is changed in either folder. If files are missing you can copy just those across afterwards.")
+                        .font(.system(size: 12.5)).foregroundStyle(Theme.textSecondary)
+                        .fixedSize(horizontal: false, vertical: true)
+                    Text("You can line up several checks and copies. They run one after another in the Queue tab.")
+                        .font(.system(size: 12.5)).foregroundStyle(Theme.textSecondary)
+                        .fixedSize(horizontal: false, vertical: true)
+                    if let b = transfer.checkBlocker {
+                        Text(b).font(.system(size: 12)).foregroundStyle(Theme.textTertiary)
                     }
                 }
+                .frame(maxWidth: 560, alignment: .leading)
+                .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
             }
             .frame(maxHeight: .infinity)
         }
@@ -893,34 +879,165 @@ private struct CheckCopyView: View {
             Spacer(minLength: 0)
             Button(path == nil ? "Choose…" : "Change…") { transfer.chooseFolder(original: original) }
                 .buttonStyle(QuietButtonStyle())
-                .disabled(transfer.checkStage == .running)
+        }
+    }
+}
+
+/// A check in progress: ring, live speed, graph, time left.
+private struct CheckRunningView: View {
+    @EnvironmentObject var transfer: TransferModel
+    var job: QueueJob
+
+    var body: some View {
+        let hashing = transfer.checkHashing
+        VStack(spacing: 14) {
+            Card(padding: 22) {
+                HStack(alignment: .center, spacing: 28) {
+                    ring(hashing)
+                    VStack(alignment: .leading, spacing: 0) {
+                        HStack(alignment: .firstTextBaseline, spacing: 8) {
+                            Text(bigNumber(hashing)).font(.system(size: 56, weight: .bold, design: .rounded)).monospacedDigit()
+                                .contentTransition(.numericText())
+                            Text(hashing ? "MB/s" : "files/s").font(.system(size: 18, weight: .semibold, design: .rounded))
+                                .foregroundStyle(Theme.textSecondary)
+                            Spacer(minLength: 8)
+                            Pill(text: transfer.checkStatus, color: hashing ? Theme.green : Theme.cyan)
+                        }
+                        SpeedGraph(values: transfer.history).frame(height: 124)
+                            .padding(.top, 10).padding(.bottom, 16)
+                        HStack(spacing: 0) {
+                            if hashing {
+                                cell("Compared", Fmt.bytes(transfer.checkBytesDone), "of \(Fmt.bytes(transfer.checkBytesTotal)), both sides", first: true)
+                                cell("Files", Fmt.count(transfer.checkFilesDone), "of \(Fmt.count(transfer.checkFilesTotal))")
+                            } else {
+                                cell("Found", Fmt.count(transfer.checkListed),
+                                     transfer.checkExpected > 0 ? "of about \(Fmt.count(transfer.checkExpected))" : "files, both sides", first: true)
+                                cell("Then", job.full ? "Checksums" : "Results", job.full ? "reads both sides" : "names and sizes")
+                            }
+                            cell("Time left", timeLeft(hashing), timeNote(hashing))
+                            cell("Elapsed", clock(since: transfer.checkStartedAt), job.full ? "full check" : "quick check")
+                        }
+                    }
+                }
+            }
+            Card(padding: 14) {
+                VStack(alignment: .leading, spacing: 8) {
+                    side("Original", "folder.fill", job.original)
+                    Rectangle().fill(Color.white.opacity(0.06)).frame(height: 1)
+                    side("Copy", "externaldrive.fill", job.copy)
+                }
+            }
+            Spacer(minLength: 0)
         }
     }
 
-    private func counter(_ n: Int, _ label: String, _ color: Color) -> some View {
-        VStack(alignment: .leading, spacing: 2) {
-            Text(Fmt.count(n)).font(.system(size: 30, weight: .bold, design: .rounded)).monospacedDigit()
-                .foregroundStyle(n == 0 && color != Theme.good ? Theme.textSecondary : color)
-            Text(label).font(.system(size: 11)).foregroundStyle(Theme.textSecondary)
+    private func bigNumber(_ hashing: Bool) -> String {
+        if hashing {
+            let mb = transfer.speed / 1_000_000
+            return mb >= 100 ? String(format: "%.0f", mb) : String(format: "%.1f", mb)
+        }
+        return Fmt.count(Int(transfer.checkRate.rounded()))
+    }
+
+    private func timeLeft(_ hashing: Bool) -> String {
+        if let eta = transfer.checkETA {
+            return eta.replacingOccurrences(of: " left", with: "").replacingOccurrences(of: "about ", with: "")
+        }
+        return hashing || transfer.checkExpected > 0 ? "Working it out" : "Not known yet"
+    }
+
+    private func timeNote(_ hashing: Bool) -> String {
+        if hashing { return "for the checksums" }
+        return transfer.checkExpected > 0 ? "for the listing" : "no saved map of these folders"
+    }
+
+    private func ring(_ hashing: Bool) -> some View {
+        let f = transfer.checkFraction
+        let counting = !hashing && transfer.checkExpected == 0
+        return ZStack {
+            Circle().stroke(Color.white.opacity(0.07), lineWidth: 16).padding(14)
+            Circle().trim(from: 0, to: max(0.002, f))
+                .stroke(hashing ? AnyShapeStyle(Theme.green) : AnyShapeStyle(Theme.brand),
+                        style: StrokeStyle(lineWidth: 16, lineCap: .round))
+                .rotationEffect(.degrees(-90))
+                .padding(14)
+                .animation(.easeOut(duration: 0.4), value: f)
+            VStack(spacing: 6) {
+                if counting || (!hashing && job.full) {
+                    Text(Fmt.count(transfer.checkListed)).font(.system(size: 40, weight: .bold, design: .rounded))
+                        .monospacedDigit().minimumScaleFactor(0.5).lineLimit(1).contentTransition(.numericText())
+                    Text("files found").font(.system(size: 13, weight: .semibold)).foregroundStyle(Theme.cyan)
+                } else {
+                    HStack(alignment: .firstTextBaseline, spacing: 2) {
+                        Text(String(Int((f * 100).rounded(.down)))).font(.system(size: 60, weight: .bold, design: .rounded))
+                            .monospacedDigit().tracking(-2).contentTransition(.numericText())
+                        Text("%").font(.system(size: 28, weight: .semibold, design: .rounded))
+                            .foregroundStyle(Theme.textSecondary)
+                    }
+                    Text(hashing ? "Comparing" : "Listing").font(.system(size: 13, weight: .semibold))
+                        .foregroundStyle(hashing ? Theme.green : Theme.cyan)
+                }
+            }
+            .padding(.horizontal, 44)
+        }
+        .frame(width: 260, height: 260)
+    }
+
+    private func cell(_ label: String, _ value: String, _ note: String, first: Bool = false) -> some View {
+        HStack(spacing: 0) {
+            if !first {
+                Rectangle().fill(Color.white.opacity(0.08)).frame(width: 1, height: 44).padding(.trailing, 16)
+            }
+            VStack(alignment: .leading, spacing: 4) {
+                Text(label).font(.system(size: 11, weight: .medium)).foregroundStyle(Theme.textSecondary)
+                Text(value).font(.system(size: 17, weight: .bold, design: .rounded)).monospacedDigit()
+                    .lineLimit(1).minimumScaleFactor(0.7)
+                Text(note).font(.system(size: 11)).foregroundStyle(Color.white.opacity(0.45)).monospacedDigit()
+                    .lineLimit(1)
+            }
+            Spacer(minLength: 0)
         }
         .frame(maxWidth: .infinity, alignment: .leading)
     }
 
-    @ViewBuilder
-    private func results(_ r: CompareResult) -> some View {
+    private func side(_ label: String, _ symbol: String, _ path: String) -> some View {
+        HStack(spacing: 12) {
+            Image(systemName: symbol).font(.system(size: 13, weight: .semibold)).foregroundStyle(Theme.cyan)
+                .frame(width: 30, height: 30)
+                .background(RoundedRectangle(cornerRadius: 9, style: .continuous).fill(Color.white.opacity(0.07)))
+            VStack(alignment: .leading, spacing: 2) {
+                Text(label).font(.system(size: 11, weight: .medium)).foregroundStyle(Theme.textSecondary)
+                Text(path).font(.system(size: 12.5, weight: .semibold)).lineLimit(1).truncationMode(.head)
+            }
+            Spacer(minLength: 0)
+        }
+    }
+}
+
+/// What a finished check found.
+private struct CheckResultView: View {
+    @EnvironmentObject var transfer: TransferModel
+    var job: QueueJob
+    var r: CompareResult
+
+    var body: some View {
         VStack(spacing: 14) {
             Card(padding: 16) {
                 VStack(alignment: .leading, spacing: 12) {
                     HStack(spacing: 10) {
                         Image(systemName: r.isComplete ? "checkmark.seal.fill" : "exclamationmark.triangle.fill")
                             .font(.system(size: 20)).foregroundStyle(r.isComplete ? Theme.good : Theme.warn)
-                        Text(r.isComplete
-                             ? (r.full ? "The copy is complete and every checksum matches." : "The copy has every file, at the same sizes.")
-                             : "The copy is not complete.")
-                            .font(.system(size: 17, weight: .bold, design: .rounded))
+                        VStack(alignment: .leading, spacing: 2) {
+                            Text(r.isComplete
+                                 ? (r.full ? "The copy is complete and every checksum matches." : "The copy has every file, at the same sizes.")
+                                 : "The copy is not complete.")
+                                .font(.system(size: 17, weight: .bold, design: .rounded))
+                            Text(job.copy).font(.system(size: 11)).foregroundStyle(Theme.textTertiary)
+                                .lineLimit(1).truncationMode(.head)
+                        }
                         Spacer(minLength: 8)
                         if !r.missing.isEmpty {
-                            Button { transfer.copyMissing() } label: {
+                            Button { transfer.copyMissing(from: job) } label: {
                                 Label("Copy the \(Fmt.count(r.missing.count)) Missing File\(r.missing.count == 1 ? "" : "s")", systemImage: "arrow.right.circle.fill")
                             }
                             .buttonStyle(GlowButtonStyle())
@@ -949,10 +1066,20 @@ private struct CheckCopyView: View {
                                 .font(.system(size: 12.5)).foregroundStyle(Theme.textSecondary).padding(16)
                         }
                     }
+                    .frame(maxWidth: .infinity, alignment: .leading)
                 }
             }
             .frame(maxHeight: .infinity)
         }
+    }
+
+    private func counter(_ n: Int, _ label: String, _ color: Color) -> some View {
+        VStack(alignment: .leading, spacing: 2) {
+            Text(Fmt.count(n)).font(.system(size: 30, weight: .bold, design: .rounded)).monospacedDigit()
+                .foregroundStyle(n == 0 && color != Theme.good ? Theme.textSecondary : color)
+            Text(label).font(.system(size: 11)).foregroundStyle(Theme.textSecondary)
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
     }
 
     @ViewBuilder
@@ -976,6 +1103,191 @@ private struct CheckCopyView: View {
                 Text("…and \(Fmt.count(items.count - 300)) more").font(.system(size: 11))
                     .foregroundStyle(Theme.textTertiary).padding(.horizontal, 10).padding(.vertical, 4)
             }
+        }
+    }
+}
+
+// MARK: - Queue
+
+/// The Queue tab: overall progress, the list of jobs, and the selected job in full.
+private struct QueuePane: View {
+    @EnvironmentObject var transfer: TransferModel
+
+    var body: some View {
+        VStack(spacing: 14) {
+            if transfer.queue.isEmpty {
+                Card(padding: 24) {
+                    VStack(alignment: .leading, spacing: 10) {
+                        CardTitle(text: "Nothing in the queue", symbol: "list.bullet.rectangle")
+                        Text("Start a copy or a check and it runs here. Add more while one is running and they follow on, one after another.")
+                            .font(.system(size: 12.5)).foregroundStyle(Theme.textSecondary)
+                            .fixedSize(horizontal: false, vertical: true)
+                        HStack(spacing: 8) {
+                            Button { transfer.mode = 0 } label: { Label("New Copy", systemImage: "plus") }
+                                .buttonStyle(QuietButtonStyle(tint: Theme.cyan))
+                            Button { transfer.mode = 1 } label: { Label("Check a Copy", systemImage: "checklist") }
+                                .buttonStyle(QuietButtonStyle())
+                        }
+                    }
+                    .frame(maxWidth: 560, alignment: .leading)
+                    .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+                }
+            } else {
+                QueueStrip()
+                if let job = transfer.shownJob {
+                    detail(job)
+                }
+            }
+        }
+    }
+
+    @ViewBuilder
+    private func detail(_ job: QueueJob) -> some View {
+        if job.state == .running {
+            if job.kind == .copy { CopyRunningView() } else { CheckRunningView(job: job) }
+        } else if job.kind == .copy, job.result != nil, job.isFinished {
+            CopyDoneView(job: job)
+        } else if let r = job.checkResult {
+            CheckResultView(job: job, r: r)
+        } else {
+            Card(padding: 24) {
+                VStack(alignment: .leading, spacing: 8) {
+                    Text(job.title).font(.system(size: 20, weight: .bold, design: .rounded))
+                    Text(job.detail).font(.system(size: 12.5)).foregroundStyle(Theme.textSecondary)
+                    Text(job.state == .waiting ? "Waiting for the jobs ahead of it." : job.summary)
+                        .font(.system(size: 12.5)).foregroundStyle(Theme.textSecondary)
+                }
+                .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+            }
+        }
+    }
+}
+
+/// Overall queue progress, the controls, and one row per job with its own bar.
+private struct QueueStrip: View {
+    @EnvironmentObject var transfer: TransferModel
+
+    var body: some View {
+        let busy = transfer.isBusy
+        let pos = transfer.queuePosition
+        Card(padding: 12) {
+            VStack(alignment: .leading, spacing: 9) {
+                HStack(spacing: 10) {
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text(headline(busy, pos)).font(.system(size: 14, weight: .bold, design: .rounded)).monospacedDigit()
+                        Text(subline(busy)).font(.system(size: 11.5)).foregroundStyle(Theme.textSecondary).monospacedDigit()
+                    }
+                    Spacer(minLength: 8)
+                    if busy {
+                        if transfer.stage == .running || transfer.stage == .preparing, transfer.checkStage != .running {
+                            if transfer.snap.paused {
+                                Button { transfer.resume() } label: { Label("Resume", systemImage: "play.fill") }
+                                    .buttonStyle(QuietButtonStyle(tint: Theme.cyan))
+                            } else {
+                                Button { transfer.pause() } label: { Label("Pause", systemImage: "pause.fill") }
+                                    .buttonStyle(QuietButtonStyle())
+                            }
+                        }
+                        Button { transfer.stop() } label: { Label(transfer.waitingCount > 0 ? "Skip" : "Stop", systemImage: "stop.fill") }
+                            .buttonStyle(QuietButtonStyle(tint: Theme.bad))
+                            .help(transfer.waitingCount > 0 ? "Stop this job and go on to the next" : "Stop this job")
+                        if transfer.waitingCount > 0 {
+                            Button { transfer.stopQueue() } label: { Label("Stop All", systemImage: "xmark.octagon.fill") }
+                                .buttonStyle(QuietButtonStyle(tint: Theme.bad))
+                                .help("Stop this job and everything waiting")
+                        }
+                    } else {
+                        Button { transfer.clearFinished() } label: { Label("Clear", systemImage: "trash") }
+                            .buttonStyle(QuietButtonStyle())
+                            .help("Clear finished jobs from the list")
+                    }
+                }
+                if busy {
+                    GradientBar(fraction: transfer.queueFraction, height: 6)
+                }
+                if transfer.queue.count > 1 {
+                    ScrollView {
+                        VStack(spacing: 2) {
+                            ForEach(transfer.queue) { job in row(job) }
+                        }
+                    }
+                    .frame(height: CGFloat(min(transfer.queue.count, 4)) * 34)
+                }
+            }
+        }
+    }
+
+    private func headline(_ busy: Bool, _ pos: (index: Int, of: Int)) -> String {
+        guard busy else {
+            let n = transfer.queue.count
+            return "Queue finished  ·  \(n) job\(n == 1 ? "" : "s")"
+        }
+        if pos.of <= 1 { return "Running 1 job  ·  \(Fmt.pct(transfer.queueFraction))" }
+        return "Job \(pos.index) of \(pos.of)  ·  queue \(Fmt.pct(transfer.queueFraction))"
+    }
+
+    private func subline(_ busy: Bool) -> String {
+        guard busy else {
+            let trouble = transfer.queue.filter { $0.state == .attention }.count
+            return trouble == 0 ? "Pick a job to see its result." : "\(trouble) job\(trouble == 1 ? "" : "s") need attention."
+        }
+        let waiting = transfer.waitingCount
+        let eta = transfer.queueETA ?? "working out the time left"
+        return waiting == 0 ? "Whole queue: \(eta)" : "Whole queue: \(eta)  ·  \(waiting) waiting"
+    }
+
+    private func row(_ job: QueueJob) -> some View {
+        let selected = transfer.shownJob?.id == job.id
+        let tint = color(job.state)
+        return HStack(spacing: 10) {
+            Image(systemName: symbol(job)).font(.system(size: 12, weight: .semibold)).foregroundStyle(tint).frame(width: 18)
+            Text(job.title).font(.system(size: 12.5, weight: .semibold)).lineLimit(1).truncationMode(.middle)
+                .frame(width: 190, alignment: .leading)
+            Text(job.isFinished ? job.summary : job.detail).font(.system(size: 11.5))
+                .foregroundStyle(job.state == .attention ? Theme.warn : Theme.textSecondary)
+                .lineLimit(1).truncationMode(.tail)
+            Spacer(minLength: 8)
+            if job.state == .running || job.state == .waiting {
+                MeterBar(fraction: job.fraction, color: Theme.cyan, height: 5).frame(width: 130)
+                Text(job.state == .waiting ? "Waiting" : Fmt.pct(job.fraction))
+                    .font(.system(size: 11.5, weight: .semibold, design: .rounded)).monospacedDigit()
+                    .foregroundStyle(job.state == .waiting ? Theme.textSecondary : Theme.cyan)
+                    .frame(width: 58, alignment: .trailing)
+            }
+            if job.state != .running {
+                Button { transfer.remove(job.id) } label: {
+                    Image(systemName: "xmark").font(.system(size: 9, weight: .bold)).foregroundStyle(Theme.textSecondary)
+                        .frame(width: 18, height: 18)
+                }
+                .buttonStyle(.plain)
+                .help(job.state == .waiting ? "Take out of the queue" : "Clear from the list")
+            } else {
+                Color.clear.frame(width: 18, height: 18)
+            }
+        }
+        .padding(.horizontal, 8).frame(height: 32)
+        .background(RoundedRectangle(cornerRadius: 8, style: .continuous).fill(Color.white.opacity(selected ? 0.09 : 0.03)))
+        .contentShape(Rectangle())
+        .onTapGesture { transfer.inspectID = job.state == .running ? nil : job.id }
+    }
+
+    private func symbol(_ job: QueueJob) -> String {
+        switch job.state {
+        case .waiting: return "clock"
+        case .running: return job.kind == .copy ? "arrow.right.circle.fill" : "checklist"
+        case .done: return "checkmark.circle.fill"
+        case .attention: return "exclamationmark.triangle.fill"
+        case .stopped: return "stop.circle"
+        }
+    }
+
+    private func color(_ state: QueueJob.State) -> Color {
+        switch state {
+        case .waiting: return Theme.textSecondary
+        case .running: return Theme.cyan
+        case .done: return Theme.good
+        case .attention: return Theme.warn
+        case .stopped: return Theme.amber
         }
     }
 }

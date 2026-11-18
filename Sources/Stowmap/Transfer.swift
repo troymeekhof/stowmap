@@ -71,49 +71,79 @@ enum TransferPlanner {
     }
 
     /// Everything under the given files and folders. A folder "A" lands as "A/…" in the destination.
-    static func build(sources: [String], options: TransferOptions, keepGoing: () -> Bool = { true }) -> TransferPlan {
+    /// `found` is called (from background threads) with the number of files discovered so far.
+    static func build(sources: [String], options: TransferOptions, keepGoing: @escaping () -> Bool = { true },
+                      found: @escaping (Int) -> Void = { _ in }) -> TransferPlan {
         var plan = TransferPlan()
+        var starts: [(String, String)] = []
         for src in sources {
             let name = (src as NSString).lastPathComponent
-            walk(src, rel: name.isEmpty ? "Volume" : name, options: options, into: &plan, keepGoing: keepGoing)
+            starts.append((src, name.isEmpty ? "Volume" : name))
         }
+        walk(starts, options: options, into: &plan, keepGoing: keepGoing, found: found)
         return plan
     }
 
     /// The contents of one folder, with paths relative to that folder (used to compare two folders).
-    static func contents(of root: String, options: TransferOptions, keepGoing: () -> Bool = { true }) -> TransferPlan {
+    static func contents(of root: String, options: TransferOptions, keepGoing: @escaping () -> Bool = { true },
+                         found: @escaping (Int) -> Void = { _ in }) -> TransferPlan {
         var plan = TransferPlan()
-        guard let names = try? FileManager.default.contentsOfDirectory(atPath: root) else {
+        guard let top = list(root) else {
             plan.unreadable.append(root)
             return plan
         }
         let prefix = root.hasSuffix("/") ? root : root + "/"
-        for name in names.sorted() where !skips(name, options) {
-            walk(prefix + name, rel: name, options: options, into: &plan, keepGoing: keepGoing)
-        }
+        var folders: [(String, String)] = []
+        add(top, under: prefix, rel: "", options: options, into: &plan, folders: &folders)
+        found(plan.fileCount)
+        walkFolders(folders, options: options, into: &plan, keepGoing: keepGoing, found: found)
+        plan.entries.sort { $0.rel < $1.rel }
         return plan
     }
 
-    private static func walk(_ path: String, rel: String, options: TransferOptions, into plan: inout TransferPlan,
-                             keepGoing: () -> Bool) {
-        var stack: [(String, String)] = [(path, rel)]
-        while let (p, r) = stack.popLast() {
-            if !keepGoing() { return }
+    /// One folder's items. Asks for names, kinds, sizes and dates in a single request where the
+    /// volume supports it (one round trip per folder on a network share, not one per file).
+    private static func list(_ path: String) -> [DirEntry]? {
+        guard let dir = opendir(path) else { return nil }
+        defer { closedir(dir) }
+        let fd = dirfd(dir)
+        if let fast = DirLister.bulk(fd: fd) { return fast }
+        rewinddir(dir)
+        return DirLister.classic(dir: dir, fd: fd)
+    }
+
+    private static func add(_ items: [DirEntry], under prefix: String, rel: String, options: TransferOptions,
+                            into plan: inout TransferPlan, folders: inout [(String, String)]) {
+        for e in items where !skips(e.name, options) {
+            let path = prefix + e.name
+            let r = rel.isEmpty ? e.name : rel + "/" + e.name
+            let modified = Date(timeIntervalSince1970: TimeInterval(e.modified))
+            if e.isDirectory {
+                plan.entries.append(PlanEntry(source: path, rel: r, kind: .folder, size: 0, modified: modified))
+                folders.append((path, r))
+            } else if e.isRegular {
+                plan.entries.append(PlanEntry(source: path, rel: r, kind: .file, size: e.length, modified: modified))
+                plan.fileCount += 1
+                plan.totalBytes += e.length
+            } else if e.isSymlink {
+                plan.entries.append(PlanEntry(source: path, rel: r, kind: .symlink, size: 0, modified: modified))
+            }
+            // Sockets, devices and pipes are not files; they are left out.
+        }
+    }
+
+    /// Starting points can be files or folders.
+    private static func walk(_ starts: [(String, String)], options: TransferOptions, into plan: inout TransferPlan,
+                             keepGoing: @escaping () -> Bool, found: @escaping (Int) -> Void) {
+        var folders: [(String, String)] = []
+        for (p, r) in starts {
             var st = stat()
             guard lstat(p, &st) == 0 else { plan.unreadable.append(p); continue }
             let type = st.st_mode & S_IFMT
             let modified = Date(timeIntervalSince1970: TimeInterval(st.st_mtimespec.tv_sec))
             if type == S_IFDIR {
                 plan.entries.append(PlanEntry(source: p, rel: r, kind: .folder, size: 0, modified: modified))
-                guard let names = try? FileManager.default.contentsOfDirectory(atPath: p) else {
-                    plan.unreadable.append(p)
-                    continue
-                }
-                let prefix = p.hasSuffix("/") ? p : p + "/"
-                // Reverse-sorted onto a stack, so files come out in name order.
-                for name in names.sorted(by: >) where !skips(name, options) {
-                    stack.append((prefix + name, r + "/" + name))
-                }
+                folders.append((p, r))
             } else if type == S_IFREG {
                 plan.entries.append(PlanEntry(source: p, rel: r, kind: .file, size: Int64(st.st_size), modified: modified))
                 plan.fileCount += 1
@@ -121,7 +151,36 @@ enum TransferPlanner {
             } else if type == S_IFLNK {
                 plan.entries.append(PlanEntry(source: p, rel: r, kind: .symlink, size: 0, modified: modified))
             }
-            // Sockets, devices and pipes are not files; they are left out.
+        }
+        walkFolders(folders, options: options, into: &plan, keepGoing: keepGoing, found: found)
+        plan.entries.sort { $0.rel < $1.rel }
+    }
+
+    /// Level by level, listing every folder of a level at the same time.
+    private static func walkFolders(_ start: [(String, String)], options: TransferOptions, into plan: inout TransferPlan,
+                                    keepGoing: @escaping () -> Bool, found: @escaping (Int) -> Void) {
+        var frontier = start
+        let lock = NSLock()
+        while !frontier.isEmpty {
+            if !keepGoing() { return }
+            let level = frontier
+            var results = [[DirEntry]?](repeating: nil, count: level.count)
+            DispatchQueue.concurrentPerform(iterations: level.count) { i in
+                if !keepGoing() { return }
+                let items = list(level[i].0)
+                lock.lock()
+                results[i] = items
+                lock.unlock()
+            }
+            var next: [(String, String)] = []
+            for (i, items) in results.enumerated() {
+                guard let items else { plan.unreadable.append(level[i].0); continue }
+                let p = level[i].0
+                add(items, under: p.hasSuffix("/") ? p : p + "/", rel: level[i].1, options: options,
+                    into: &plan, folders: &next)
+            }
+            found(plan.fileCount)
+            frontier = next
         }
     }
 }
@@ -667,28 +726,84 @@ struct CompareResult: Sendable {
     var isComplete: Bool { missing.isEmpty && different.isEmpty }
 }
 
+/// A value handed between threads under its own lock.
+final class Shared<T>: @unchecked Sendable {
+    private let lock = NSLock()
+    private var stored: T
+    init(_ value: T) { stored = value }
+    var value: T {
+        get { lock.lock(); defer { lock.unlock() }; return stored }
+        set { lock.lock(); stored = newValue; lock.unlock() }
+    }
+}
+
 final class CompareJob: @unchecked Sendable {
     private let lock = NSLock()
     private var done: Int64 = 0
-    private var total: Int64 = 1
+    private var total: Int64 = 0
     private var stage = "Listing both folders"
+    private var listedA = 0
+    private var listedB = 0
+    private var hashing = false
+    private var pairsDone = 0
+    private var pairsTotal = 0
     private var cancelled = false
 
     func cancel() { lock.lock(); cancelled = true; lock.unlock() }
     var isCancelled: Bool { lock.lock(); defer { lock.unlock() }; return cancelled }
-    var progress: (fraction: Double, stage: String) {
-        lock.lock(); defer { lock.unlock() }
-        return (min(1, Double(done) / Double(total)), stage)
+
+    struct Progress: Sendable {
+        var stage: String
+        var listed: Int          // files found so far, both sides
+        var hashing: Bool        // false while listing
+        var fraction: Double     // of the checksum pass (0 while listing)
+        var bytesDone: Int64     // read so far, both sides
+        var bytesTotal: Int64
+        var filesDone: Int       // files compared so far
+        var filesTotal: Int
     }
-    private func set(stage s: String, total t: Int64) { lock.lock(); stage = s; total = max(1, t); done = 0; lock.unlock() }
+    var progress: Progress {
+        lock.lock(); defer { lock.unlock() }
+        return Progress(stage: stage, listed: listedA + listedB, hashing: hashing,
+                        fraction: hashing ? min(1, Double(done) / Double(max(1, total))) : 0,
+                        bytesDone: done, bytesTotal: total, filesDone: pairsDone, filesTotal: pairsTotal)
+    }
     private func add(_ n: Int64) { lock.lock(); done += n; lock.unlock() }
+    private func pairFinished() { lock.lock(); pairsDone += 1; lock.unlock() }
+    private func setListed(a: Int? = nil, b: Int? = nil) {
+        lock.lock()
+        if let a { listedA = a }
+        if let b { listedB = b }
+        lock.unlock()
+    }
+    private func digest(_ path: String, _ kind: HashKind) -> String? {
+        FileHasher.hashFile(path, kind: kind, onBytes: { self.add(Int64($0)) }, keepGoing: { !self.isCancelled })
+    }
 
     /// Blocking. Quick = names and sizes; full = also reads both sides and compares checksums.
     func run(original: String, copy: String, full: Bool, options: TransferOptions) -> CompareResult {
         var out = CompareResult()
         out.full = full
-        let a = TransferPlanner.contents(of: original, options: options, keepGoing: { !self.isCancelled })
-        let b = TransferPlanner.contents(of: copy, options: options, keepGoing: { !self.isCancelled })
+
+        // List both folders at the same time; they are usually on different drives.
+        let planA = Shared(TransferPlan()), planB = Shared(TransferPlan())
+        let group = DispatchGroup()
+        group.enter()
+        DispatchQueue.global(qos: .userInitiated).async {
+            planA.value = TransferPlanner.contents(of: original, options: options, keepGoing: { !self.isCancelled },
+                                                   found: { n in self.setListed(a: n) })
+            group.leave()
+        }
+        group.enter()
+        DispatchQueue.global(qos: .userInitiated).async {
+            planB.value = TransferPlanner.contents(of: copy, options: options, keepGoing: { !self.isCancelled },
+                                                   found: { n in self.setListed(b: n) })
+            group.leave()
+        }
+        group.wait()
+        if isCancelled { return out }
+        let a = planA.value, b = planB.value
+
         out.unreadable = a.unreadable + b.unreadable
         var copyFiles: [String: PlanEntry] = [:]
         for e in b.entries where e.kind == .file { copyFiles[e.rel] = e }
@@ -714,14 +829,59 @@ final class CompareJob: @unchecked Sendable {
         }
 
         if full {
-            set(stage: "Comparing checksums", total: toHash.reduce(Int64(0)) { $0 + $1.0.size } * 2)
-            for (e, other) in toHash {
+            lock.lock()
+            stage = "Comparing checksums"
+            total = toHash.reduce(Int64(0)) { $0 + $1.0.size } * 2
+            done = 0
+            pairsTotal = toHash.count
+            hashing = true
+            lock.unlock()
+
+            let kind = options.hash
+            let smallLimit: Int64 = 4 * 1024 * 1024
+            let small = toHash.filter { $0.0.size < smallLimit }
+            let large = toHash.filter { $0.0.size >= smallLimit }
+            // (original, copy, checksum of the original, checksum of the copy)
+            let verdicts = Shared([(PlanEntry, PlanEntry, String?, String?)]())
+            let vlock = NSLock()
+            func record(_ e: PlanEntry, _ other: PlanEntry, _ ha: String?, _ hb: String?) {
+                vlock.lock()
+                var list = verdicts.value
+                list.append((e, other, ha, hb))
+                verdicts.value = list
+                vlock.unlock()
+                pairFinished()
+            }
+
+            // Small files: several at once. Their cost is the wait per file, not the bytes.
+            let workers = 4
+            DispatchQueue.concurrentPerform(iterations: workers) { w in
+                var i = w
+                while i < small.count {
+                    if self.isCancelled { return }
+                    let (e, other) = small[i]
+                    let ha = self.digest(e.source, kind)
+                    let hb = self.digest(other.source, kind)
+                    record(e, other, ha, hb)
+                    i += workers
+                }
+            }
+            // Large files: one at a time, reading the two sides at the same time.
+            for (e, other) in large {
                 if isCancelled { break }
-                let ha = FileHasher.hashFile(e.source, kind: options.hash, onBytes: { self.add(Int64($0)) },
-                                             keepGoing: { !self.isCancelled })
-                let hb = FileHasher.hashFile(other.source, kind: options.hash, onBytes: { self.add(Int64($0)) },
-                                             keepGoing: { !self.isCancelled })
-                if isCancelled { break }
+                let left = Shared<String?>(nil)
+                let pair = DispatchGroup()
+                pair.enter()
+                DispatchQueue.global(qos: .userInitiated).async {
+                    left.value = self.digest(e.source, kind)
+                    pair.leave()
+                }
+                let hb = digest(other.source, kind)
+                pair.wait()
+                record(e, other, left.value, hb)
+            }
+            if isCancelled { return out }
+            for (e, other, ha, hb) in verdicts.value {
                 if let ha, let hb, ha == hb {
                     out.matched += 1
                     out.matchedBytes += e.size

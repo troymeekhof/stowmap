@@ -445,6 +445,30 @@ final class AppModel: ObservableObject {
     @Published var selectedID: String?
     @Published private(set) var sessions: [String: ScanSession] = [:]
 
+    /// How many files a folder held when its drive was last mapped; nil when no map reaches it.
+    func fileCount(atPath path: String) -> Int? {
+        var best: (depth: Int, count: Int)?
+        for session in sessions.values {
+            guard let root = session.result?.root else { continue }
+            let base = root.path
+            let prefix = base.hasSuffix("/") ? base : base + "/"
+            guard path == base || path.hasPrefix(prefix) else { continue }
+            var node = root
+            var found = true
+            if path != base {
+                for name in path.dropFirst(prefix.count).split(separator: "/") {
+                    guard let child = node.children.first(where: { $0.kind == .folder && $0.name == name }) else {
+                        found = false
+                        break
+                    }
+                    node = child
+                }
+            }
+            if found, node.fileCount > 0, base.count > (best?.depth ?? -1) { best = (base.count, node.fileCount) }
+        }
+        return best?.count
+    }
+
     /// What the main area shows: one drive's map, search results, or duplicates.
     enum Pane { case drive, search, duplicates, copy }
     @Published var pane: Pane = .drive

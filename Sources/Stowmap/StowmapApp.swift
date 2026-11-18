@@ -30,6 +30,7 @@ struct StowmapApp: App {
                 .background(Theme.windowBackground)
                 .ignoresSafeArea()
                 .preferredColorScheme(.dark)
+                .onAppear { transfer.expectedFiles = { [weak model] path in model?.fileCount(atPath: path) } }
         }
         .windowStyle(.hiddenTitleBar)
         .windowResizability(.contentMinSize)

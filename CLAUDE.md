@@ -30,6 +30,10 @@ Sidebar: search across scanned drives, Duplicates, Copy & Verify, drive list, Sc
 - Copy & Verify (Transfer.swift, TransferModel.swift, Views/TransferViews.swift): up to three
   destinations, xxHash64/MD5/SHA-256, temp-name writes then rename, conflict policies, MHL + plain
   checksum lists, pause/stop. Check a Copy compares two folders.
+- Queue (TransferModel.swift `QueueJob`): copies and checks run one after another; Queue tab shows overall
+  and per-job bars, the running job in full, and results of finished jobs. `DockProgress` draws the queue
+  bar on the Dock icon. Copy planning and Check a Copy list folders with `DirLister.bulk`, a level at a time
+  in parallel; Check a Copy reads both sides at once.
 - Pace.swift: what each drive/link should manage; quiet notes only when a job is well under that.
 - Network shares are listed with `getattrlistbulk` (DirLister.bulk), falling back to readdir + stat.
 - `design/` is the visual source of truth (stageshow-ui mocks; see design/README.md).

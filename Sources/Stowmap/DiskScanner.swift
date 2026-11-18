@@ -247,6 +247,8 @@ struct DirEntry {
     var dev: Int32
     var ino: UInt64
     var links: UInt32
+    var isSymlink = false
+    var modified: Int = 0       // seconds since 1970
 }
 
 enum DirLister {
@@ -263,7 +265,8 @@ enum DirLister {
             let type = st.st_mode & S_IFMT
             out.append(DirEntry(name: name, isDirectory: type == S_IFDIR, isRegular: type == S_IFREG,
                                 allocated: Int64(st.st_blocks) * 512, length: Int64(st.st_size),
-                                flags: st.st_flags, dev: st.st_dev, ino: st.st_ino, links: UInt32(st.st_nlink)))
+                                flags: st.st_flags, dev: st.st_dev, ino: st.st_ino, links: UInt32(st.st_nlink),
+                                isSymlink: type == S_IFLNK, modified: Int(st.st_mtimespec.tv_sec)))
         }
         return out
     }
@@ -273,6 +276,7 @@ enum DirLister {
     private static let cmnName: UInt32 = 0x0000_0001
     private static let cmnDevID: UInt32 = 0x0000_0002
     private static let cmnObjType: UInt32 = 0x0000_0008
+    private static let cmnModTime: UInt32 = 0x0000_0400
     private static let cmnFlags: UInt32 = 0x0004_0000
     private static let cmnFileID: UInt32 = 0x0200_0000
     private static let fileLinkCount: UInt32 = 0x0000_0001
@@ -285,7 +289,7 @@ enum DirLister {
     static func bulk(fd: Int32) -> [DirEntry]? {
         var attrs = attrlist()
         attrs.bitmapcount = UInt16(ATTR_BIT_MAP_COUNT)
-        attrs.commonattr = cmnReturned | cmnName | cmnDevID | cmnObjType | cmnFlags | cmnFileID
+        attrs.commonattr = cmnReturned | cmnName | cmnDevID | cmnObjType | cmnModTime | cmnFlags | cmnFileID
         attrs.fileattr = fileLinkCount | fileAllocSize | fileDataLength
         let size = 256 * 1024
         let buf = UnsafeMutableRawPointer.allocate(byteCount: size, alignment: 8)
@@ -319,6 +323,10 @@ enum DirLister {
                 if got.commonattr & cmnDevID != 0 { e.dev = f.loadUnaligned(as: Int32.self); f += 4 }
                 var objType: UInt32 = 0
                 if got.commonattr & cmnObjType != 0 { objType = f.loadUnaligned(as: UInt32.self); f += 4 }
+                if got.commonattr & cmnModTime != 0 {
+                    e.modified = f.loadUnaligned(as: timespec.self).tv_sec
+                    f += MemoryLayout<timespec>.size
+                }
                 if got.commonattr & cmnFlags != 0 { e.flags = f.loadUnaligned(as: UInt32.self); f += 4 }
                 if got.commonattr & cmnFileID != 0 { e.ino = f.loadUnaligned(as: UInt64.self); f += 8 }
                 if got.fileattr & fileLinkCount != 0 { e.links = f.loadUnaligned(as: UInt32.self); f += 4 }
@@ -327,6 +335,9 @@ enum DirLister {
                 guard f <= p + length, !e.name.isEmpty, got.commonattr & cmnObjType != 0 else { return nil }
                 e.isRegular = objType == 1      // VREG
                 e.isDirectory = objType == 2    // VDIR
+                e.isSymlink = objType == 5      // VLNK
+                // A file must come back with its length; without it, use the classic way.
+                if e.isRegular && got.fileattr & fileDataLength == 0 { return nil }
                 if e.name != "." && e.name != ".." { out.append(e) }
                 p += length
             }
