@@ -755,6 +755,19 @@ final class AppModel: ObservableObject {
         dupPhase = .idle
     }
 
+    /// From a drive's header: look for duplicates within that one drive.
+    func openDuplicates(for volumeID: String) {
+        pane = .duplicates
+        guard dupPhase != .running else { return }
+        let ids = Set(scannedRoots().map(\.id))
+        guard ids.contains(volumeID) else { return }
+        dupExcluded = ids.subtracting([volumeID])
+        dupGroups = []
+        dupPhase = .idle
+        let mb = UserDefaults.standard.object(forKey: "dupMinMB") as? Int ?? 10
+        findDuplicates(minSize: Int64(mb) * 1_000_000)
+    }
+
     func findDuplicates(minSize: Int64) {
         guard dupPhase != .running else { return }
         let roots = duplicateRoots()
