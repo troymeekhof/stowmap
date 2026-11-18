@@ -19,7 +19,7 @@ See the Files table in README.md. Key types:
 - `ScanStore`: per-volume saved index in `~/Library/Application Support/Stowmap/Index` (JSON + lzfse,
   entries under ~1 MB rolled up).
 
-## Features (as of 1.3)
+## Features (as of 1.5)
 
 Sidebar: search across scanned drives, Duplicates, Copy & Verify, drive list, Scan All Drives, Leave Feedback.
 - Maps (Map / Tree / File Types / Largest Files), Collector → Trash, or confirmed permanent delete on
@@ -30,10 +30,13 @@ Sidebar: search across scanned drives, Duplicates, Copy & Verify, drive list, Sc
 - Copy & Verify (Transfer.swift, TransferModel.swift, Views/TransferViews.swift): up to three
   destinations, xxHash64/MD5/SHA-256, temp-name writes then rename, conflict policies, MHL + plain
   checksum lists, pause/stop. Check a Copy compares two folders.
-- Queue (TransferModel.swift `QueueJob`): copies and checks run one after another; Queue tab shows overall
-  and per-job bars, the running job in full, and results of finished jobs. `DockProgress` draws the queue
-  bar on the Dock icon. Copy planning and Check a Copy list folders with `DirLister.bulk`, a level at a time
-  in parallel; Check a Copy reads both sides at once.
+- Queue (TransferModel.swift): `QueueJob` rows; each running job is a `JobRun` (own engine, timer, live
+  state). `advance()` starts every waiting job whose devices (`Hardware.deviceKey`: physical disk, or
+  "network" for any share) are free, up to `maxTogether`; a job never jumps an earlier one waiting for the
+  same device. The queue is a column beside the form; picking a job shows it in full. `DockProgress` draws
+  the queue bar on the Dock icon. Listing uses `DirLister.bulk`, a level at a time in parallel.
+- Top tabs (`TopTabs`, MainViews.swift): Drives / Duplicates / Copy & Verify, each with its own progress.
+  The sidebar is drives only. Duplicates has a tick box per scanned drive (`dupExcluded`).
 - Pace.swift: what each drive/link should manage; quiet notes only when a job is well under that.
 - Network shares are listed with `getattrlistbulk` (DirLister.bulk), falling back to readdir + stat.
 - `design/` is the visual source of truth (stageshow-ui mocks; see design/README.md).
