@@ -1213,8 +1213,8 @@ enum Finder {
         let probes = [NSHomeDirectory() + "/Library/Application Support/com.apple.TCC/TCC.db",
                       "/Library/Application Support/com.apple.TCC/TCC.db"]
         for path in probes {
-            let fd = open(path, O_RDONLY)
-            if fd >= 0 { close(fd); return true }
+            let fd = Darwin.open(path, O_RDONLY)
+            if fd >= 0 { Darwin.close(fd); return true }
         }
         return false
     }
