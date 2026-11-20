@@ -3,6 +3,15 @@
   <channel>
     <title>Stowmap</title>
     <item>
+      <title>Version 1.5.1</title>
+      <pubDate>Fri, 20 Nov 2026 15:29:55 GMT</pubDate>
+      <sparkle:version>1.5.1</sparkle:version>
+      <sparkle:shortVersionString>1.5.1</sparkle:shortVersionString>
+      <sparkle:minimumSystemVersion>13.0</sparkle:minimumSystemVersion>
+      <description><![CDATA[<p>The access notice now checks whether macOS is really granting Full Disk Access and says what to do: re-add the app after an update, rescan, or nothing when the remaining folders belong to macOS. The question mark beside Hidden space opens a breakdown of what it contains.</p>]]></description>
+      <enclosure url="https://github.com/troymeekhof/stowmap/releases/download/v1.5.1/Stowmap-1.5.1.zip" type="application/octet-stream" sparkle:edSignature="KzS6JxihT3WMh9h4y+6HbWJVP8DPnE3hq10FgxUuCnS4CdbyxugcLkNd1Q4LOmsG5J1Hl3c5Ll1Fdc4rRG2jAQ==" length="4332834" />
+    </item>
+    <item>
       <title>Version 1.5</title>
       <pubDate>Wed, 18 Nov 2026 02:26:27 GMT</pubDate>
       <sparkle:version>1.5</sparkle:version>
