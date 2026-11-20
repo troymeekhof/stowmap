@@ -272,7 +272,7 @@ struct SearchView: View {
 
             if model.collectedCount > 0 { SharedCollectorBar() }
         }
-        .padding(.horizontal, 22).padding(.top, 16).padding(.bottom, 18)
+        .padding(.horizontal, 22).padding(.top, 30).padding(.bottom, 18)
         .onChange(of: model.searchKind) { _ in model.runSearch() }
     }
 }
@@ -363,7 +363,7 @@ struct DuplicatesView: View {
 
             if model.collectedCount > 0 { SharedCollectorBar() }
         }
-        .padding(.horizontal, 22).padding(.top, 16).padding(.bottom, 18)
+        .padding(.horizontal, 22).padding(.top, 30).padding(.bottom, 18)
         .alert("Some items couldn't be moved", isPresented: Binding(
             get: { model.toolError != nil }, set: { if !$0 { model.toolError = nil } })) {
             Button("OK", role: .cancel) {}

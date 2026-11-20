@@ -66,7 +66,7 @@ struct CopyView: View {
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity)
         }
-        .padding(.horizontal, 22).padding(.top, 16).padding(.bottom, 18)
+        .padding(.horizontal, 22).padding(.top, 30).padding(.bottom, 18)
     }
 }
 

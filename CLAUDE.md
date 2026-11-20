@@ -35,7 +35,7 @@ Sidebar: search across scanned drives, Duplicates, Copy & Verify, drive list, Sc
   "network" for any share) are free, up to `maxTogether`; a job never jumps an earlier one waiting for the
   same device. The queue is a column beside the form; picking a job shows it in full. `DockProgress` draws
   the queue bar on the Dock icon. Listing uses `DirLister.bulk`, a level at a time in parallel.
-- Top tabs (`TopTabs`, MainViews.swift): Drives / Duplicates / Copy & Verify, each with its own progress.
+- Icon rail (`TopTabs`, MainViews.swift) down the left edge: Drives / Duplicates / Copy & Verify, each with a progress ring.
   The sidebar is drives only. Duplicates has a tick box per scanned drive (`dupExcluded`).
 - Pace.swift: what each drive/link should manage; quiet notes only when a job is well under that.
 - Network shares are listed with `getattrlistbulk` (DirLister.bulk), falling back to readdir + stat.

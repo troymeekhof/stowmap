@@ -9,9 +9,10 @@ struct ContentView: View {
     @State private var dropTargeted = false
 
     var body: some View {
-        VStack(spacing: 0) {
+        HStack(spacing: 0) {
           TopTabs()
-          Rectangle().fill(Color.white.opacity(0.06)).frame(height: 1)
+              .frame(width: 66)
+          Rectangle().fill(Color.white.opacity(0.06)).frame(width: 1)
           HStack(spacing: 0) {
             if model.pane == .drive || model.pane == .search {
                 Sidebar()
@@ -67,56 +68,64 @@ struct ContentView: View {
     }
 }
 
-/// The three parts of the app, as tabs across the top of the window. Each shows its own progress.
+/// The three parts of the app, as an icon rail down the left edge. Each shows its own progress.
 struct TopTabs: View {
     @EnvironmentObject var model: AppModel
     @EnvironmentObject var transfer: TransferModel
 
     var body: some View {
-        HStack(spacing: 4) {
-            tab("Drives", "externaldrive.fill", selected: model.pane == .drive || model.pane == .search,
-                busy: model.scanningCount > 0, fraction: nil, status: drivesStatus) { model.pane = .drive }
-            tab("Duplicates", "doc.on.doc.fill", selected: model.pane == .duplicates,
-                busy: dupBusy, fraction: dupFraction, status: dupStatus) { model.pane = .duplicates }
-            tab("Copy & Verify", "square.and.arrow.down.on.square.fill", selected: model.pane == .copy,
-                busy: transfer.isBusy, fraction: transfer.busyFraction, status: copyStatus) { model.pane = .copy }
+        VStack(spacing: 6) {
+            item("Drives", "externaldrive.fill", selected: model.pane == .drive || model.pane == .search,
+                 busy: model.scanningCount > 0, fraction: nil, status: drivesStatus) { model.pane = .drive }
+            item("Dupes", "doc.on.doc.fill", selected: model.pane == .duplicates,
+                 busy: dupBusy, fraction: dupFraction, status: "Duplicates: " + dupStatus) { model.pane = .duplicates }
+            item("Copy", "square.and.arrow.down.on.square.fill", selected: model.pane == .copy,
+                 busy: transfer.isBusy, fraction: transfer.busyFraction, status: "Copy & Verify: " + copyStatus) { model.pane = .copy }
+            Spacer(minLength: 0)
         }
-        .padding(4)
-        .background(RoundedRectangle(cornerRadius: 13, style: .continuous).fill(Color.white.opacity(0.05)))
-        .frame(maxWidth: .infinity)
-        .padding(.top, 8).padding(.bottom, 8)
+        .padding(.top, 46)      // clear of the window's close, minimise and zoom buttons
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .background(Color.black.opacity(0.30))
     }
 
-    private func tab(_ title: String, _ symbol: String, selected: Bool, busy: Bool, fraction: Double?,
-                     status: String, action: @escaping () -> Void) -> some View {
+    private func item(_ title: String, _ symbol: String, selected: Bool, busy: Bool, fraction: Double?,
+                      status: String, action: @escaping () -> Void) -> some View {
         Button {
             withAnimation(.easeOut(duration: 0.18)) { action() }
         } label: {
-            VStack(alignment: .leading, spacing: 4) {
-                HStack(spacing: 8) {
-                    Image(systemName: symbol).font(.system(size: 12, weight: .semibold))
+            VStack(spacing: 4) {
+                ZStack {
+                    Image(systemName: symbol).font(.system(size: 15, weight: .semibold))
                         .foregroundStyle(selected ? Color.white : Theme.textSecondary)
-                    VStack(alignment: .leading, spacing: 1) {
-                        Text(title).font(.system(size: 12.5, weight: .semibold))
-                            .foregroundStyle(selected ? Color.white : Color.white.opacity(0.75))
-                        Text(status).font(.system(size: 10)).foregroundStyle(Theme.textSecondary)
-                            .monospacedDigit().lineLimit(1)
-                    }
-                    Spacer(minLength: 0)
                     if busy {
-                        ProgressView().controlSize(.small).scaleEffect(0.7).frame(width: 14, height: 14)
+                        // A small ring in the corner: progress when it is known, a turning arc when it isn't.
+                        ZStack {
+                            Circle().stroke(Color.white.opacity(0.18), lineWidth: 2)
+                            if let fraction {
+                                Circle().trim(from: 0, to: max(0.03, min(1, fraction)))
+                                    .stroke(selected ? Color.white : Theme.cyan, style: StrokeStyle(lineWidth: 2, lineCap: .round))
+                                    .rotationEffect(.degrees(-90))
+                                    .animation(.easeOut(duration: 0.3), value: fraction)
+                            } else {
+                                ProgressView().controlSize(.small).scaleEffect(0.45)
+                            }
+                        }
+                        .frame(width: 11, height: 11)
+                        .offset(x: 15, y: -9)
                     }
                 }
-                MeterBar(fraction: fraction ?? 0, color: Theme.cyan, height: 3)
-                    .opacity(busy && fraction != nil ? 1 : 0)
+                .frame(height: 20)
+                Text(busy && fraction != nil ? Fmt.pct(fraction ?? 0) : title)
+                    .font(.system(size: 9.5, weight: .semibold)).monospacedDigit().lineLimit(1)
+                    .foregroundStyle(selected ? Color.white : (busy ? Theme.cyan : Theme.textSecondary))
             }
-            .padding(.horizontal, 12).padding(.top, 7).padding(.bottom, 5)
-            .frame(width: 236, alignment: .leading)
-            .background(RoundedRectangle(cornerRadius: 10, style: .continuous)
-                .fill(Color.white.opacity(selected ? 0.11 : 0.0001)))
+            .frame(width: 50, height: 46)
+            .background(RoundedRectangle(cornerRadius: 12, style: .continuous)
+                .fill(selected ? AnyShapeStyle(Theme.brand) : AnyShapeStyle(Color.white.opacity(0.0001))))
             .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
+        .help(status)
     }
 
     private var drivesStatus: String {
@@ -223,7 +232,7 @@ struct Sidebar: View {
                     .frame(width: 26, height: 26)
                 Text("Stowmap").font(.system(size: 19, weight: .bold, design: .rounded))
             }
-            .padding(.top, 14).padding(.horizontal, 18).padding(.bottom, 12)
+            .padding(.top, 38).padding(.horizontal, 18).padding(.bottom, 12)
 
             tools
 
@@ -572,7 +581,7 @@ struct DetailView: View {
                     .transition(.move(edge: .bottom).combined(with: .opacity))
             }
         }
-        .padding(.horizontal, 22).padding(.top, 16).padding(.bottom, 18)
+        .padding(.horizontal, 22).padding(.top, 30).padding(.bottom, 18)
         .confirmationDialog("Move \(session.collected.count) item\(session.collected.count == 1 ? "" : "s") to the Trash?",
                             isPresented: $confirmTrash) {
             Button("Move to Trash (\(Fmt.bytes(session.collectedBytes)))", role: .destructive) {
