@@ -3,6 +3,15 @@
   <channel>
     <title>Stowmap</title>
     <item>
+      <title>Version 1.5.2</title>
+      <pubDate>Fri, 20 Nov 2026 15:40:31 GMT</pubDate>
+      <sparkle:version>1.5.2</sparkle:version>
+      <sparkle:shortVersionString>1.5.2</sparkle:shortVersionString>
+      <sparkle:minimumSystemVersion>13.0</sparkle:minimumSystemVersion>
+      <description><![CDATA[<p>Drives, Duplicates and Copy &amp; Verify now sit in an icon rail down the left edge, each with a progress ring while it works. The wide tab bar across the top is gone.</p>]]></description>
+      <enclosure url="https://github.com/troymeekhof/stowmap/releases/download/v1.5.2/Stowmap-1.5.2.zip" type="application/octet-stream" sparkle:edSignature="ZkCUVUPfvszx13AYFRi8UINpAXo1QvCGHtlLDUpTYf4SNuGFFZsrpiU1L9neQhUTXJSlNa0A5lV9NfBAEGG0Bg==" length="4338522" />
+    </item>
+    <item>
       <title>Version 1.5.1</title>
       <pubDate>Fri, 20 Nov 2026 15:29:55 GMT</pubDate>
       <sparkle:version>1.5.1</sparkle:version>
