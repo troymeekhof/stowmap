@@ -674,7 +674,7 @@ struct DetailView: View {
         }
 
         if result.denied > 0 {
-            AccessBanner(count: result.denied)
+            AccessBanner(count: result.denied, session: session)
         } else if result.fromCache {
             HStack(spacing: 8) {
                 Image(systemName: "clock.arrow.circlepath").foregroundStyle(Theme.amber)
@@ -719,18 +719,41 @@ struct DetailView: View {
 
 struct AccessBanner: View {
     var count: Int
+    @ObservedObject var session: ScanSession
+
     var body: some View {
+        let access = Finder.hasFullDiskAccess
+        let stamp = UserDefaults.standard.double(forKey: "fullAccessScan-" + session.volume.id)
+        let scannedWithAccess = access && stamp >= (session.result?.date.timeIntervalSince1970 ?? .infinity) - 1
+        let folders = "\(Fmt.count(count)) folder\(count == 1 ? "" : "s")"
         HStack(spacing: 10) {
-            Image(systemName: "lock.shield.fill").foregroundStyle(Theme.warn)
-            Text("\(Fmt.count(count)) folder\(count == 1 ? "" : "s") couldn't be read. Give Stowmap Full Disk Access, then rescan, for the complete picture.")
-                .font(.system(size: 11.5)).foregroundStyle(Color.white.opacity(0.8))
-                .fixedSize(horizontal: false, vertical: true)
+            Image(systemName: scannedWithAccess ? "lock.fill" : "lock.shield.fill")
+                .foregroundStyle(scannedWithAccess ? Theme.textSecondary : Theme.warn)
+            Group {
+                if scannedWithAccess {
+                    Text("\(folders) stay closed even with Full Disk Access. They belong to macOS or to other accounts on this Mac, and no app can open them without an administrator password. Their size is counted under Hidden space.")
+                } else if access {
+                    Text("Full Disk Access is on. Rescan to read the \(folders) skipped last time.")
+                } else {
+                    Text("\(folders) couldn't be read: macOS isn't giving Stowmap Full Disk Access right now. If Stowmap is already switched on in Settings, select it there, remove it with the minus button and add it again (macOS drops the permission when the app updates). Then quit and reopen Stowmap, and rescan.")
+                }
+            }
+            .font(.system(size: 11.5)).foregroundStyle(Color.white.opacity(0.8))
+            .fixedSize(horizontal: false, vertical: true)
             Spacer(minLength: 8)
-            Button("Open Settings") { Finder.openFullDiskAccessSettings() }
-                .buttonStyle(QuietButtonStyle(tint: Theme.warn))
+            if scannedWithAccess {
+                EmptyView()
+            } else if access {
+                Button("Rescan") { session.start() }
+                    .buttonStyle(QuietButtonStyle(tint: Theme.warn))
+            } else {
+                Button("Open Settings") { Finder.openFullDiskAccessSettings() }
+                    .buttonStyle(QuietButtonStyle(tint: Theme.warn))
+            }
         }
         .padding(.horizontal, 12).padding(.vertical, 8)
-        .background(RoundedRectangle(cornerRadius: 12, style: .continuous).fill(Theme.warn.opacity(0.10)))
+        .background(RoundedRectangle(cornerRadius: 12, style: .continuous)
+            .fill(scannedWithAccess ? Color.white.opacity(0.05) : Theme.warn.opacity(0.10)))
     }
 }
 

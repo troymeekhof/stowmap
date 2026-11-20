@@ -1,0 +1,118 @@
+<!doctype html><meta charset="utf-8"><title>Stowmap navigation options</title>
+<style>
+*{box-sizing:border-box;margin:0}
+body{background:#050507;font:13px/1.3 Inter,system-ui,-apple-system,"Helvetica Neue",sans-serif;color:#fff;padding:36px;display:grid;gap:34px;justify-content:center;-webkit-font-smoothing:antialiased}
+.opt{width:1120px}
+.cap{display:flex;align-items:baseline;gap:12px;margin:0 2px 12px}
+.cap b{font-size:20px;font-weight:700;letter-spacing:-.01em}
+.cap span{font-size:13px;color:rgba(255,255,255,.6)}
+.stage{height:400px;overflow:hidden;border-radius:14px 14px 0 0;-webkit-mask-image:linear-gradient(#000 calc(100% - 70px),transparent);mask-image:linear-gradient(#000 calc(100% - 70px),transparent)}
+.win{width:1120px;height:640px;border-radius:14px;overflow:hidden;display:flex;flex-direction:column;background:linear-gradient(#12121a,#08080d);box-shadow:inset 0 0 0 1px rgba(255,255,255,.09);position:relative}
+.row{display:flex;flex:1;min-height:0}
+.lights{position:absolute;top:14px;left:14px;display:flex;gap:8px;z-index:3}
+.lights i{width:12px;height:12px;border-radius:50%}
+.lights i:nth-child(1){background:#ff5f57}.lights i:nth-child(2){background:#febc2e}.lights i:nth-child(3){background:#28c840}
+svg{width:14px;height:14px;fill:currentColor;flex:none;display:block}
+.dim{color:rgba(255,255,255,.55)}
+.side{width:244px;flex:none;background:rgba(0,0,0,.18);border-right:1px solid rgba(255,255,255,.06);display:flex;flex-direction:column;padding:0 10px}
+.brand{display:flex;align-items:center;gap:8px;padding:44px 8px 12px;font-size:17px;font-weight:700}
+.logo{width:22px;height:22px;border-radius:6px;background:conic-gradient(from 210deg,#8C5CFF,#40D9FF,#59E699,#8C5CFF)}
+.search{display:flex;align-items:center;gap:7px;padding:7px 10px;border-radius:9px;background:rgba(255,255,255,.06);color:rgba(255,255,255,.5);font-size:12.5px;margin-bottom:10px}
+.grp{font-size:10px;font-weight:600;color:rgba(255,255,255,.35);padding:8px 8px 4px}
+.vol{display:flex;gap:10px;align-items:center;padding:8px;border-radius:12px}
+.vol.on{background:rgba(255,255,255,.09)}
+.vic{width:32px;height:32px;border-radius:9px;background:rgba(255,255,255,.08);display:grid;place-items:center;flex:none}
+.vol.on .vic{background:linear-gradient(135deg,#8C5CFF,#40D9FF)}
+.vtx{flex:1;min-width:0;display:flex;flex-direction:column;gap:5px}
+.vn{font-size:12.5px;font-weight:600}
+.vs{font-size:10px;color:rgba(255,255,255,.55);font-variant-numeric:tabular-nums}
+.meter{height:4px;border-radius:99px;background:rgba(255,255,255,.08);overflow:hidden}
+.meter i{display:block;height:100%;border-radius:99px;background:#40D9FF}
+.main{flex:1;min-width:0;padding:16px 22px;display:flex;flex-direction:column;gap:13px}
+.main.tall{padding-top:30px}
+.head{display:flex;align-items:center;gap:8px}
+.h1{font-size:25px;font-weight:700;letter-spacing:-.02em;line-height:1.15}
+.hs{font-size:12px;color:rgba(255,255,255,.55);margin-top:4px}
+.pill{font-size:11px;font-weight:600;padding:5px 10px;border-radius:99px;display:flex;gap:5px;align-items:center;white-space:nowrap}
+.pill.am{color:#FFC74D;background:rgba(255,199,77,.14)}.pill.cy{color:#40D9FF;background:rgba(64,217,255,.12)}
+.big{height:6px}
+.tabs{display:flex;padding:4px;border-radius:99px;background:rgba(255,255,255,.06);width:560px}
+.tabs div{flex:1;display:flex;justify-content:center;align-items:center;gap:7px;padding:8px 0;border-radius:99px;font-size:12.5px;font-weight:600;color:rgba(255,255,255,.7)}
+.tabs .on{background:rgba(64,217,255,.32);color:#fff}
+.cards{display:flex;gap:14px;flex:1}
+.card{flex:1;border-radius:16px;background:rgba(255,255,255,.06);box-shadow:inset 0 0 0 1px rgba(255,255,255,.10);padding:16px;display:flex;gap:18px}
+.donut{width:150px;height:150px;border-radius:50%;background:conic-gradient(#8C5CFF 0 34%,#40D9FF 0 55%,#FF7366 0 68%,#FFC74D 0 78%,#59EBA6 0 85%,rgba(255,255,255,.2) 0);-webkit-mask:radial-gradient(circle,transparent 46px,#000 47px);mask:radial-gradient(circle,transparent 46px,#000 47px);flex:none}
+.bars{flex:1;display:flex;flex-direction:column;gap:11px;padding-top:6px}
+.bars i{height:8px;border-radius:99px;background:rgba(255,255,255,.09)}
+.sp{flex:1}
+.stage.full{-webkit-mask-image:none;mask-image:none;border-radius:14px}
+.stage.full .win{height:440px}
+.stage.full{height:440px}
+.stage.full .card{-webkit-mask-image:linear-gradient(#000 60%,transparent);mask-image:linear-gradient(#000 60%,transparent)}
+
+/* A: title-bar segmented control */
+.tbar{height:44px;flex:none;display:flex;align-items:center;justify-content:center;border-bottom:1px solid rgba(255,255,255,.06);position:relative}
+.seg{display:flex;padding:3px;border-radius:9px;background:rgba(255,255,255,.07)}
+.seg div{display:flex;align-items:center;gap:6px;padding:5px 14px;border-radius:7px;font-size:12px;font-weight:600;color:rgba(255,255,255,.62)}
+.seg .on{background:rgba(255,255,255,.14);color:#fff}
+.seg em{font-style:normal;font-size:10.5px;color:#40D9FF;font-variant-numeric:tabular-nums}
+.ring{width:13px;height:13px;border-radius:50%;background:conic-gradient(#40D9FF 0 45%,rgba(255,255,255,.18) 0);-webkit-mask:radial-gradient(circle,transparent 3.6px,#000 4.2px);mask:radial-gradient(circle,transparent 3.6px,#000 4.2px);flex:none}
+
+/* B: icon rail */
+.rail{width:64px;flex:none;background:rgba(0,0,0,.30);border-right:1px solid rgba(255,255,255,.06);display:flex;flex-direction:column;align-items:center;gap:6px;padding-top:50px}
+.rb{width:44px;padding:8px 0 6px;border-radius:11px;display:flex;flex-direction:column;align-items:center;gap:4px;color:rgba(255,255,255,.55);font-size:9px;font-weight:600;position:relative}
+.rb svg{width:17px;height:17px}
+.rb.on{background:linear-gradient(135deg,#8C5CFF,#40D9FF);color:#fff}
+.rb .ring{position:absolute;top:3px;right:3px;width:12px;height:12px}
+.rb u{text-decoration:none;font-size:9px;color:#40D9FF;font-variant-numeric:tabular-nums}
+
+/* C: sidebar tools dock */
+.dock{margin-top:auto;padding:10px 0 12px;border-top:1px solid rgba(255,255,255,.06);display:grid;grid-template-columns:1fr;gap:6px}
+.dock .t{border-radius:11px;background:rgba(255,255,255,.05);box-shadow:inset 0 0 0 1px rgba(255,255,255,.09);padding:9px 10px;display:flex;flex-direction:column;gap:6px}
+.dock .tn{white-space:nowrap;display:flex;align-items:center;gap:6px;font-size:11.5px;font-weight:600}
+.dock .vs{font-size:10px}
+.dl{font-size:10px;font-weight:600;color:rgba(255,255,255,.35);padding:0 4px}
+
+/* D: switcher at the top of the sidebar */
+.sw{display:flex;padding:3px;border-radius:10px;background:rgba(255,255,255,.07);margin-bottom:10px}
+.sw div{flex:1;display:flex;flex-direction:column;align-items:center;gap:3px;padding:6px 0 5px;border-radius:8px;font-size:9.5px;font-weight:600;color:rgba(255,255,255,.55)}
+.sw .on{background:rgba(255,255,255,.14);color:#fff}
+.sw u{text-decoration:none;color:#40D9FF;font-variant-numeric:tabular-nums}
+
+/* E: activity buttons on the right of the header */
+.act{display:flex;align-items:center;gap:7px;padding:6px 11px;border-radius:99px;background:rgba(255,255,255,.08);box-shadow:inset 0 0 0 1px rgba(255,255,255,.12);font-size:12px;font-weight:600;white-space:nowrap}
+.act.live{color:#40D9FF;background:rgba(64,217,255,.10);box-shadow:inset 0 0 0 1px rgba(64,217,255,.2)}
+.act em{font-style:normal;font-variant-numeric:tabular-nums}
+.topright{position:absolute;top:9px;right:14px;display:flex;gap:8px;z-index:3}
+</style>
+<body>
+<script>
+const I={
+ drive:'<svg viewBox="0 0 16 16"><path d="M3 3h10l2 6v3a1 1 0 0 1-1 1H2a1 1 0 0 1-1-1V9zm0 7v2h10v-2zm8 .5h1.5v1H11z"/></svg>',
+ dup:'<svg viewBox="0 0 16 16"><path d="M5 1h6l3 3v7H5zM2 5h2v8h6v2H2z"/></svg>',
+ copy:'<svg viewBox="0 0 16 16"><path d="M2 2h9v3h3v9H5v-3H2zm7.2 6.2L7.5 6.5v1.2H4v1.6h3.5v1.2z"/></svg>',
+ search:'<svg viewBox="0 0 16 16"><path d="M7 2a5 5 0 0 1 4 8l3 3-1 1-3-3a5 5 0 1 1-3-9zm0 1.6a3.4 3.4 0 1 0 0 6.8 3.4 3.4 0 0 0 0-6.8z"/></svg>',
+ pie:'<svg viewBox="0 0 16 16"><path d="M7 2v7h7a7 7 0 1 1-7-7zm2-1a6 6 0 0 1 6 6H9z"/></svg>',
+ tree:'<svg viewBox="0 0 16 16"><path d="M2 3h8v2H2zm3 4h9v2H5zm0 4h9v2H5z"/></svg>',
+ types:'<svg viewBox="0 0 16 16"><path d="M8 1l7 3-7 3-7-3zm-7 6l7 3 7-3v2l-7 3-7-3zm0 4l7 3 7-3v2l-7 3-7-3z"/></svg>',
+ up:'<svg viewBox="0 0 16 16"><path d="M8 1a7 7 0 1 1 0 14A7 7 0 0 1 8 1zm0 3L4.5 8H7v4h2V8h2.5z"/></svg>'};
+const lights='<div class="lights"><i></i><i></i><i></i></div>';
+const vol=(n,s,f,on)=>`<div class="vol ${on?'on':''}"><div class="vic">${I.drive}</div><div class="vtx"><div class="vn">${n}</div><div class="meter"><i style="width:${f}%"></i></div><div class="vs">${s}</div></div></div>`;
+const drives=`<div class="grp">INTERNAL</div>${vol('Macintosh HD','445.94 GB free of 994.66 GB',55,1)}<div class="grp">EXTERNAL</div>${vol('EDITORBETA','289.29 GB free of 1 TB',71)}${vol('LaCie 5TB Shuttle','1.43 TB free of 5 TB',71)}<div class="grp">NETWORK</div>${vol('02_CLIENTS','NAS · 6.2 TB free',62)}`;
+const search=`<div class="search">${I.search}Search all drives</div>`;
+const drivesShort=`<div class="grp">INTERNAL</div>${vol('Macintosh HD','445.94 GB free of 994.66 GB',55,1)}<div class="grp">EXTERNAL</div>${vol('EDITORBETA','289.29 GB free of 1 TB',71)}`;
+const side=(top,bottom='',d=drives)=>`<div class="side"><div class="brand"><div class="logo"></div>Stowmap</div>${top}${search}${d}${bottom}</div>`;
+const main=(cls='',extra='')=>`<div class="main ${cls}"><div class="head"><div><div class="h1">Macintosh HD</div><div class="hs">Startup disk · APFS · 548.73 GB used of 994.66 GB · 445.94 GB free</div></div><div class="sp"></div>${extra}<div class="pill am">● Saved just now</div><div class="pill cy">● 2.1M files</div></div><div class="meter big"><i style="width:55%"></i></div><div class="tabs"><div class="on">${I.pie}Map</div><div>${I.tree}Tree</div><div>${I.types}File Types</div><div>${I.up}Largest Files</div></div><div class="cards"><div class="card"><div class="donut"></div><div class="bars"><i style="width:70%"></i><i style="width:52%"></i><i style="width:61%"></i><i style="width:40%"></i><i style="width:56%"></i></div></div><div class="card"><div class="bars"><i style="width:80%"></i><i style="width:64%"></i><i style="width:72%"></i><i style="width:48%"></i><i style="width:58%"></i></div></div></div></div>`;
+const opts=[
+['A','Segmented control in the title bar','Small, native, centered. Labels only; a ring and percent appear on a tab while it works.',
+ `<div class="win">${lights}<div class="tbar"><div class="seg"><div class="on">${I.drive}Drives</div><div>${I.dup}Duplicates</div><div>${I.copy}Copy &amp; Verify <span class="ring"></span><em>45%</em></div></div></div><div class="row">${side('')}${main()}</div></div>`],
+['B','Icon rail down the left edge','Three sections as icons beside the drive list. Clearly a different level from the drives.',
+ `<div class="win">${lights}<div class="row"><div class="rail"><div class="rb on">${I.drive}Drives</div><div class="rb">${I.dup}Dupes</div><div class="rb">${I.copy}<u>45%</u><span class="ring"></span></div></div>${side('')}${main('tall')}</div></div>`],
+['C','Tools dock at the foot of the sidebar','Drives stay on top; the two tools sit in their own bordered tiles at the bottom with live status.',
+ `<div class="win">${lights}<div class="row">${side('',`<div class="dock"><div class="dl">TOOLS</div><div class="t"><div class="tn">${I.dup}Duplicates</div><div class="vs">Find identical files</div></div><div class="t"><div class="tn">${I.copy}Copy &amp; Verify</div><div class="meter"><i style="width:45%"></i></div><div class="vs">45% · 12 min left</div></div></div>`,drivesShort)}${main('tall')}</div></div>`],
+['D','Switcher at the top of the sidebar','One control under the logo swaps the whole sidebar: drives, duplicate drives, or the copy queue.',
+ `<div class="win">${lights}<div class="row">${side(`<div class="sw"><div class="on">${I.drive}Drives</div><div>${I.dup}Duplicates</div><div>${I.copy}<span>Copy <u>45%</u></span></div></div>`)}${main('tall')}</div></div>`],
+['E','Activity buttons at the top right','Drives is home. The tools are two buttons in the window corner that light up with progress and open full-page.',
+ `<div class="win">${lights}<div class="topright"><div class="act">${I.dup}Duplicates</div><div class="act live">${I.copy}Copy &amp; Verify <span class="ring"></span><em>45% · 12 min</em></div></div><div class="row">${side('')}${main('tall" style="padding-top:52px')}</div></div>`]];
+document.body.innerHTML=opts.map(o=>`<div class="opt" id="o${o[0]}"><div class="cap"><b>${o[0]} · ${o[1]}</b><span>${o[2]}</span></div><div class="stage ${o[0]=='C'?'full':''}">${o[3]}</div></div>`).join('');
+</script>

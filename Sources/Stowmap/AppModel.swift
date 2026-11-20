@@ -236,6 +236,9 @@ final class ScanSession: ObservableObject, Identifiable {
         let r = scanned
         if volume.kind != .network { addHiddenSpace(to: r.root) }
         result = r
+        if Finder.hasFullDiskAccess {
+            UserDefaults.standard.set(r.date.timeIntervalSince1970, forKey: "fullAccessScan-" + volume.id)
+        }
         focus = r.root
         phase = .done
         revision += 1
@@ -1202,6 +1205,18 @@ enum Finder {
         let term = URL(fileURLWithPath: "/System/Applications/Utilities/Terminal.app")
         NSWorkspace.shared.open([URL(fileURLWithPath: path)], withApplicationAt: term,
                                 configuration: NSWorkspace.OpenConfiguration())
+    }
+
+    /// Whether macOS is letting this copy of the app read protected folders right now.
+    /// (The switch in Settings can be on and still not apply after an update.)
+    static var hasFullDiskAccess: Bool {
+        let probes = [NSHomeDirectory() + "/Library/Application Support/com.apple.TCC/TCC.db",
+                      "/Library/Application Support/com.apple.TCC/TCC.db"]
+        for path in probes {
+            let fd = open(path, O_RDONLY)
+            if fd >= 0 { close(fd); return true }
+        }
+        return false
     }
 
     static func openFullDiskAccessSettings() {

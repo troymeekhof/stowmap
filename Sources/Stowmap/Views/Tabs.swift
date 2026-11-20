@@ -230,6 +230,7 @@ struct MapTab: View {
 }
 
 struct MapRow: View {
+    @State private var showHiddenInfo = false
     @ObservedObject var session: ScanSession
     var node: FileNode
     var fraction: Double
@@ -294,12 +295,67 @@ struct MapRow: View {
                     ? "Space the server counts as used that isn't in any share you've scanned: shares that aren't mounted, snapshots, recycle bins and system data."
                     : "Space the server counts as used outside the shares you've scanned. Scan \(waiting.joined(separator: ", ")) to break this down.") {}
             } else {
-                IconButton(symbol: "questionmark", help: "Snapshots, purgeable data and protected system files that macOS counts as used but doesn't show to apps. Full Disk Access can shrink this.") {
-                    Finder.openFullDiskAccessSettings()
-                }
+                IconButton(symbol: "questionmark", help: "What Hidden space is made of") { showHiddenInfo = true }
+                    .popover(isPresented: $showHiddenInfo, arrowEdge: .trailing) {
+                        HiddenSpaceInfo(session: session, size: node.size)
+                    }
             }
         } else {
             NodeActions(session: session, node: node, showCollect: hot || hover)
+        }
+    }
+}
+
+/// What the "Hidden space" entry on a local disk is made of, with the parts that can be measured.
+struct HiddenSpaceInfo: View {
+    @ObservedObject var session: ScanSession
+    var size: Int64
+
+    var body: some View {
+        let purgeable = max(0, session.volume.free - session.volume.realFree)
+        let denied = session.result?.denied ?? 0
+        let access = Finder.hasFullDiskAccess
+        VStack(alignment: .leading, spacing: 12) {
+            VStack(alignment: .leading, spacing: 3) {
+                Text("Hidden space  ·  \(Fmt.bytes(size))").font(.system(size: 15, weight: .bold, design: .rounded))
+                Text("Space macOS counts as used on this disk that the scan could not walk through. It is real, but it is not in any folder Stowmap could open.")
+                    .font(.system(size: 11.5)).foregroundStyle(Theme.textSecondary)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+            if purgeable > 0 {
+                part("Purgeable", Fmt.bytes(purgeable),
+                     "macOS clears this by itself when the disk gets full: caches, local Time Machine snapshots and files that are also in iCloud. You don't need to do anything about it.")
+            }
+            if denied > 0 {
+                part("Folders that couldn't be opened", Fmt.count(denied),
+                     access ? "These belong to macOS or to other accounts on this Mac. No app can read them without an administrator password, so their size lands here."
+                            : "Their contents land here. Full Disk Access opens most of them; rescan afterwards and this number drops.")
+            }
+            part("System data outside folders", "the rest",
+                 "Local snapshots kept for Time Machine and updates, the swap file and sleep image, and the hidden startup, recovery and update volumes that share this disk.")
+            Text("To see snapshots: Disk Utility, View menu, Show APFS Snapshots.")
+                .font(.system(size: 11)).foregroundStyle(Theme.textTertiary)
+            if !access {
+                Button("Open Full Disk Access Settings…") { Finder.openFullDiskAccessSettings() }
+                    .buttonStyle(QuietButtonStyle(tint: Theme.warn))
+            }
+        }
+        .padding(16)
+        .frame(width: 380, alignment: .leading)
+        .foregroundStyle(.white)
+        .preferredColorScheme(.dark)
+    }
+
+    private func part(_ title: String, _ value: String, _ text: String) -> some View {
+        VStack(alignment: .leading, spacing: 3) {
+            HStack {
+                Text(title).font(.system(size: 12.5, weight: .semibold))
+                Spacer(minLength: 8)
+                Text(value).font(.system(size: 12.5, weight: .semibold, design: .rounded)).monospacedDigit()
+                    .foregroundStyle(Theme.cyan)
+            }
+            Text(text).font(.system(size: 11.5)).foregroundStyle(Theme.textSecondary)
+                .fixedSize(horizontal: false, vertical: true)
         }
     }
 }
